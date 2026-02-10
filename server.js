@@ -127,32 +127,47 @@ Falls KEINE Fehler gefunden wurden, setze widerspruchsbrief auf null.
 - Auf Deutsch antworten.
 - JEDEN erkennbaren Posten auflisten, auch wenn OK.
 
+## PERSPEKTIVE: Nur Fehler die den MIETER benachteiligen!
+
+Du arbeitest für den MIETER. Nur Probleme melden die den Mieter GELD KOSTEN (= Überzahlung).
+- Wenn der Mieteranteil für einen Posten 0,00 € ist → der Mieter zahlt nichts → das ist GUT für den Mieter → "ok"
+- Wenn ein Posten nicht auf den Mieter umgelegt wird → das ist kein Problem für den Mieter → "ok"
+- NUR wenn der Mieter ZU VIEL zahlt, ist es ein "fehler" oder "warnung"
+
 ## STRENGE Regeln für status (UNBEDINGT einhalten!)
 
-**"fehler"** NUR verwenden wenn ALLE 3 Bedingungen erfüllt sind:
-  1. Es gibt einen klar belegbaren Verstoß gegen BetrKV, BGB oder HeizkostenV
-  2. Die geschätzte Ersparnis ist GRÖSSER als 0 €
-  3. Du bist dir SICHER (>90% Konfidenz)
-  → Wenn die Ersparnis 0 € wäre oder du dir nicht sicher bist: NIEMALS "fehler" verwenden!
+**"fehler"** NUR verwenden wenn ALLE Bedingungen erfüllt sind:
+  1. Der Mieter wird durch diesen Fehler finanziell BENACHTEILIGT (= zahlt zu viel)
+  2. Die geschätzte Ersparnis für den Mieter ist mindestens 5 €
+  3. Es gibt einen klar belegbaren Verstoß gegen BetrKV, BGB oder HeizkostenV
+  4. Du bist dir SICHER (>90% Konfidenz)
 
 **"warnung"** verwenden wenn:
-  - Ein Posten auffällig hoch ist (über Durchschnitt), aber du nicht sicher bist ob es ein Fehler ist
-  - Formale Mängel die keine direkte Ersparnis bringen (z.B. fehlende Angabe)
-  - Du einen Verdacht hast, aber nicht genug Infos für "fehler"
+  - Der Mieter möglicherweise zu viel zahlt, aber du nicht sicher bist
+  - Ein Posten auffällig hoch ist (>50% über Durchschnitt)
+  - Es formale Mängel gibt die der Mieter beim Vermieter ansprechen sollte
   - ersparnis_geschaetzt darf bei Warnungen 0 sein
 
 **"ok"** verwenden wenn:
   - Der Posten plausibel und im normalen Rahmen ist
+  - Der Mieteranteil 0,00 € ist (egal ob das korrekt berechnet wurde oder nicht)
   - ersparnis_geschaetzt MUSS 0 sein
 
-**VERBOTEN**: Status "fehler" mit ersparnis_geschaetzt = 0. Das darf NIEMALS vorkommen.
-**VERBOTEN**: Posten als "fehler" markieren nur weil du den Betrag nicht überprüfen kannst.
+## VERBOTEN (Verstöße machen den Bericht unbrauchbar!)
+- "fehler" mit ersparnis_geschaetzt = 0 → VERBOTEN
+- "fehler" mit ersparnis_geschaetzt unter 5 € → VERBOTEN, stattdessen "warnung"
+- "fehler" bei Posten wo Mieteranteil 0 € ist → VERBOTEN (der Mieter zahlt ja nichts!)
+- "fehler" bei Posten die dem VERMIETER schaden aber dem Mieter helfen → VERBOTEN
+- Titel der dem Erklärungstext widerspricht → VERBOTEN (z.B. Titel sagt "Frist überschritten" aber Text sagt "noch fristgerecht")
+- Posten als "fehler" markieren nur weil du den Betrag nicht verifizieren kannst → VERBOTEN
 
 ## Konsistenz
 - Analysiere systematisch jeden Posten anhand der Prüfpunkte oben.
 - Verwende die Durchschnittswerte als Orientierung, nicht als harte Grenze.
-- Ein Posten der 10-20% über dem Durchschnitt liegt ist "ok", nicht "warnung".
-- Erst ab 50%+ über Durchschnitt ist eine "warnung" gerechtfertigt.`;
+- 10-20% über Durchschnitt = "ok", nicht "warnung".
+- 50%+ über Durchschnitt = "warnung".
+- Nur klar belegbare Verstöße mit >5 € Ersparnis = "fehler".
+- Der Titel muss EXAKT widerspiegeln was das Problem ist. Keine Übertreibungen.`;
 
 // === Token cost limits ===
 const MAX_PDF_TEXT_CHARS = 15000;  // ~4K tokens, plenty for a Nebenkostenabrechnung
