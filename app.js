@@ -148,6 +148,14 @@ function addFiles(files) {
             alert(`"${file.name}" ist zu groß. Maximal 10 MB pro Datei.`);
             continue;
         }
+        if (file.type !== 'application/pdf' && file.size < 15 * 1024) {
+            alert(`"${file.name}" ist zu klein (${Math.round(file.size / 1024)} KB). Das Bild ist vermutlich leer oder beschädigt. Bitte fotografieren Sie Ihre Abrechnung erneut.`);
+            continue;
+        }
+        if (file.type === 'application/pdf' && file.size < 5 * 1024) {
+            alert(`"${file.name}" ist zu klein (${Math.round(file.size / 1024)} KB). Die PDF-Datei scheint leer oder beschädigt zu sein.`);
+            continue;
+        }
         if (collectedFiles.length >= 5 && file.type !== 'application/pdf') {
             alert('Maximal 5 Dateien erlaubt.');
             break;
@@ -299,40 +307,63 @@ function animateProgress() {
 }
 
 function showError(message) {
-    const canRetry = currentSessionId && (analysisErrorType === 'files_expired' || analysisErrorType === 'analysis_failed' || analysisErrorType === 'rate_limit');
+    const isValidationError = analysisErrorType && analysisErrorType.startsWith('validation_');
+    const canRetry = !isValidationError && currentSessionId && (analysisErrorType === 'files_expired' || analysisErrorType === 'analysis_failed' || analysisErrorType === 'rate_limit');
 
-    let retryHTML = '';
-    if (canRetry) {
-        retryHTML = `
-            <div style="background: #f0faf4; border-radius: 12px; padding: 24px; margin-bottom: 20px; text-align: left;">
-                <h4 style="margin: 0 0 8px 0; color: #1a6b4a;">Kostenlos erneut versuchen</h4>
-                <p style="color: #4a5568; margin: 0 0 16px 0; font-size: 14px;">
-                    Sie haben bereits bezahlt. Laden Sie Ihre Abrechnung einfach nochmal hoch — die Prüfung wird kostenlos wiederholt.
-                </p>
-                <input type="file" id="retryFileInput" accept=".pdf,.jpg,.jpeg,.png" multiple hidden>
-                <button class="btn" id="retryUploadBtn">Abrechnung erneut hochladen</button>
+    let contentHTML = '';
+
+    if (isValidationError) {
+        // Validation errors: friendly message, refund info, link back to upload
+        const icon = analysisErrorType === 'validation_keine_abrechnung' ? '&#128196;' :
+                     analysisErrorType === 'validation_nicht_lesbar' ? '&#128247;' : '&#128203;';
+        const title = analysisErrorType === 'validation_keine_abrechnung' ? 'Keine Nebenkostenabrechnung erkannt' :
+                      analysisErrorType === 'validation_nicht_lesbar' ? 'Dokument nicht lesbar' : 'Dokument unvollständig';
+
+        contentHTML = `
+            <div style="padding: 40px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">${icon}</div>
+                <h3 style="margin-bottom: 12px;">${title}</h3>
+                <p style="color: #6b7280; margin-bottom: 24px; max-width: 500px; margin-left: auto; margin-right: auto;">${escapeHTML(message)}</p>
+                <a href="/#upload" class="btn btn-lg" style="display: inline-block; text-decoration: none; margin-top: 8px;">Neue Abrechnung hochladen</a>
+            </div>
+        `;
+    } else {
+        // Technical errors: retry option + support contact
+        let retryHTML = '';
+        if (canRetry) {
+            retryHTML = `
+                <div style="background: #f0faf4; border-radius: 12px; padding: 24px; margin-bottom: 20px; text-align: left;">
+                    <h4 style="margin: 0 0 8px 0; color: #1a6b4a;">Kostenlos erneut versuchen</h4>
+                    <p style="color: #4a5568; margin: 0 0 16px 0; font-size: 14px;">
+                        Sie haben bereits bezahlt. Laden Sie Ihre Abrechnung einfach nochmal hoch — die Prüfung wird kostenlos wiederholt.
+                    </p>
+                    <input type="file" id="retryFileInput" accept=".pdf,.jpg,.jpeg,.png" multiple hidden>
+                    <button class="btn" id="retryUploadBtn">Abrechnung erneut hochladen</button>
+                </div>
+            `;
+        }
+
+        contentHTML = `
+            <div style="padding: 40px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">&#9888;</div>
+                <h3 style="margin-bottom: 12px;">Analyse fehlgeschlagen</h3>
+                <p style="color: #6b7280; margin-bottom: 24px;">${escapeHTML(message)}</p>
+                ${retryHTML}
+                <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 8px;">
+                    <p style="color: #6b7280; font-size: 14px; margin-bottom: 12px;">
+                        Problem besteht weiterhin? Schreiben Sie uns:
+                    </p>
+                    <a href="mailto:marc@marcboehle.de?subject=Analyse fehlgeschlagen (${currentSessionId || 'keine Session'})&body=Meine Analyse ist fehlgeschlagen. Session: ${currentSessionId || 'unbekannt'}"
+                       style="color: #1a6b4a; font-weight: 600; text-decoration: underline;">
+                        marc@marcboehle.de
+                    </a>
+                    <p style="color: #9ca3af; font-size: 12px; margin-top: 8px;">Wir melden uns innerhalb von 24 Stunden und finden eine Lösung.</p>
+                </div>
             </div>
         `;
     }
 
-    resultPreview.innerHTML = `
-        <div style="padding: 40px; text-align: center;">
-            <div style="font-size: 48px; margin-bottom: 16px;">&#9888;</div>
-            <h3 style="margin-bottom: 12px;">Analyse fehlgeschlagen</h3>
-            <p style="color: #6b7280; margin-bottom: 24px;">${escapeHTML(message)}</p>
-            ${retryHTML}
-            <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 8px;">
-                <p style="color: #6b7280; font-size: 14px; margin-bottom: 12px;">
-                    Problem besteht weiterhin? Schreiben Sie uns:
-                </p>
-                <a href="mailto:marc@marcboehle.de?subject=Analyse fehlgeschlagen (${currentSessionId || 'keine Session'})&body=Meine Analyse ist fehlgeschlagen. Session: ${currentSessionId || 'unbekannt'}"
-                   style="color: #1a6b4a; font-weight: 600; text-decoration: underline;">
-                    marc@marcboehle.de
-                </a>
-                <p style="color: #9ca3af; font-size: 12px; margin-top: 8px;">Wir melden uns innerhalb von 24 Stunden und finden eine Lösung.</p>
-            </div>
-        </div>
-    `;
+    resultPreview.innerHTML = contentHTML;
     resultPreview.style.display = 'block';
     resultPreview.style.animation = 'fadeInUp 0.5s ease';
 

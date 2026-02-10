@@ -87,6 +87,8 @@ Deine Aufgabe: Analysiere die hochgeladene Nebenkostenabrechnung auf Fehler und 
 Antworte AUSSCHLIESSLICH mit folgendem JSON (kein anderer Text):
 
 {
+  "validierung": "ok | nicht_lesbar | keine_abrechnung | unvollstaendig",
+  "validierung_grund": "Nur ausfüllen wenn validierung != ok. Kurze Erklärung für den Nutzer.",
   "zusammenfassung": "Kurze Zusammenfassung in 1-2 Sätzen",
   "wohnflaeche_erkannt": "z.B. 65 m² oder null",
   "abrechnungszeitraum": "z.B. 01.01.2024 - 31.12.2024 oder null",
@@ -167,7 +169,30 @@ Du arbeitest für den MIETER. Nur Probleme melden die den Mieter GELD KOSTEN (= 
 - 10-20% über Durchschnitt = "ok", nicht "warnung".
 - 50%+ über Durchschnitt = "warnung".
 - Nur klar belegbare Verstöße mit >5 € Ersparnis = "fehler".
-- Der Titel muss EXAKT widerspiegeln was das Problem ist. Keine Übertreibungen.`;
+- Der Titel muss EXAKT widerspiegeln was das Problem ist. Keine Übertreibungen.
+
+## Dokument-Validierung (Feld "validierung")
+
+BEVOR du die Analyse startest, prüfe das Dokument:
+
+**"nicht_lesbar"** — wenn:
+  - Das Bild/PDF so unscharf ist, dass du weniger als 50% der Zahlen/Posten lesen kannst
+  - Der Text komplett unleserlich ist
+  - validierung_grund: Erkläre was das Problem ist (z.B. "Das Foto ist zu unscharf. Bitte fotografieren Sie die Abrechnung bei guter Beleuchtung und ohne Bewegungsunschärfe.")
+
+**"keine_abrechnung"** — wenn:
+  - Das Dokument offensichtlich KEINE Nebenkostenabrechnung/Betriebskostenabrechnung ist
+  - Z.B. ein Mietvertrag, Kontoauszug, Stromrechnung, beliebiges anderes Dokument, leere Seite
+  - validierung_grund: Erkläre was du stattdessen erkannt hast (z.B. "Dies scheint ein Mietvertrag zu sein, keine Nebenkostenabrechnung.")
+
+**"unvollstaendig"** — wenn:
+  - Offensichtlich wichtige Teile fehlen (z.B. nur die letzte Seite mit der Summe, aber keine Einzelposten)
+  - Weniger als 3 Kostenposten erkennbar sind
+  - NICHT verwenden wenn nur kleine Teile fehlen — dann normal analysieren mit Hinweis
+
+**"ok"** — in allen anderen Fällen. Dann normal analysieren.
+
+Wenn validierung != "ok": Setze alle anderen Felder auf sinnvolle Defaults (leere Arrays, null, 0). Die Analyse wird nicht durchgeführt.`;
 
 // === Token cost limits ===
 const MAX_PDF_TEXT_CHARS = 15000;  // ~4K tokens, plenty for a Nebenkostenabrechnung
@@ -502,6 +527,24 @@ async function runAnalysisWithRetry(files, maxRetries = 2) {
     throw lastError;
 }
 
+// === Auto-refund via Stripe ===
+async function autoRefund(sessionId, reason) {
+    try {
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        if (session.payment_intent && session.payment_status === 'paid') {
+            await stripe.refunds.create({
+                payment_intent: session.payment_intent,
+                reason: 'requested_by_customer',
+            });
+            console.log(`  Auto-refund issued for ${sessionId}: ${reason}`);
+            return true;
+        }
+    } catch (err) {
+        console.error(`  Auto-refund failed for ${sessionId}:`, err.message);
+    }
+    return false;
+}
+
 // === Start background analysis for a session ===
 function startBackgroundAnalysis(sessionId) {
     if (activeAnalyses.has(sessionId)) return; // Already running
@@ -513,6 +556,35 @@ function startBackgroundAnalysis(sessionId) {
 
     runAnalysisWithRetry(pending.files)
         .then(async (result) => {
+            // Check document validation
+            if (result.validierung && result.validierung !== 'ok') {
+                const validierungMessages = {
+                    'nicht_lesbar': 'Das Dokument konnte leider nicht gelesen werden. Bitte laden Sie deutlichere Fotos oder ein besseres PDF hoch.',
+                    'keine_abrechnung': 'Das hochgeladene Dokument scheint keine Nebenkostenabrechnung zu sein.',
+                    'unvollstaendig': 'Das Dokument scheint unvollständig zu sein. Bitte laden Sie alle Seiten Ihrer Abrechnung hoch.',
+                };
+
+                let errorMsg = validierungMessages[result.validierung] || 'Dokument konnte nicht verarbeitet werden.';
+                if (result.validierung_grund) {
+                    errorMsg += ' ' + result.validierung_grund;
+                }
+
+                // Auto-refund — customer shouldn't pay for an unusable document
+                const refunded = await autoRefund(sessionId, result.validierung);
+                if (refunded) {
+                    errorMsg += ' Ihr Geld (3,99 €) wurde automatisch zurückerstattet.';
+                }
+
+                console.log(`Validation failed for ${sessionId}: ${result.validierung} — ${result.validierung_grund || 'no reason'}`);
+                completedResults.set(sessionId, {
+                    error: errorMsg,
+                    errorType: 'validation_' + result.validierung,
+                    refunded,
+                    createdAt: Date.now(),
+                });
+                return;
+            }
+
             completedResults.set(sessionId, { result, createdAt: Date.now() });
             console.log(`Analysis complete for ${sessionId}: ${result.fehler_anzahl} errors, ${result.warnungen_anzahl} warnings`);
 
