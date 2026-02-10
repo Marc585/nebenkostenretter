@@ -15,6 +15,8 @@ let collectedFiles = [];
 // === On page load: check if returning from Stripe or resuming session ===
 let analysisResult = null;
 let analysisError = null;
+let analysisErrorType = null;
+let currentSessionId = null;
 let apiDone = false;
 
 (function checkSession() {
@@ -27,6 +29,8 @@ let apiDone = false;
     }
 
     if (sessionId) {
+        currentSessionId = sessionId;
+
         // Save to localStorage (backup for reload/close)
         localStorage.setItem('nk_session_id', sessionId);
 
@@ -54,6 +58,7 @@ let apiDone = false;
 function pollForResults(sessionId) {
     analysisResult = null;
     analysisError = null;
+    analysisErrorType = null;
     apiDone = false;
 
     const poll = async () => {
@@ -67,8 +72,9 @@ function pollForResults(sessionId) {
                 localStorage.removeItem('nk_session_id');
             } else if (data.status === 'error') {
                 analysisError = data.error;
+                analysisErrorType = data.errorType || 'unknown';
                 apiDone = true;
-                localStorage.removeItem('nk_session_id');
+                // Keep session_id in localStorage for retry
             } else if (data.status === 'processing') {
                 // Keep polling every 2 seconds
                 setTimeout(poll, 2000);
@@ -138,9 +144,13 @@ function addFiles(files) {
             alert(`"${file.name}" wird nicht unterstützt. Nur PDF, JPG, PNG.`);
             continue;
         }
-        if (file.size > 20 * 1024 * 1024) {
-            alert(`"${file.name}" ist zu groß. Maximal 20 MB pro Datei.`);
+        if (file.size > 10 * 1024 * 1024) {
+            alert(`"${file.name}" ist zu groß. Maximal 10 MB pro Datei.`);
             continue;
+        }
+        if (collectedFiles.length >= 5 && file.type !== 'application/pdf') {
+            alert('Maximal 5 Dateien erlaubt.');
+            break;
         }
         // For PDFs, replace the file list (single PDF = whole document)
         if (file.type === 'application/pdf') {
@@ -289,16 +299,94 @@ function animateProgress() {
 }
 
 function showError(message) {
+    const canRetry = currentSessionId && (analysisErrorType === 'files_expired' || analysisErrorType === 'analysis_failed' || analysisErrorType === 'rate_limit');
+
+    let retryHTML = '';
+    if (canRetry) {
+        retryHTML = `
+            <div style="background: #f0faf4; border-radius: 12px; padding: 24px; margin-bottom: 20px; text-align: left;">
+                <h4 style="margin: 0 0 8px 0; color: #1a6b4a;">Kostenlos erneut versuchen</h4>
+                <p style="color: #4a5568; margin: 0 0 16px 0; font-size: 14px;">
+                    Sie haben bereits bezahlt. Laden Sie Ihre Abrechnung einfach nochmal hoch — die Prüfung wird kostenlos wiederholt.
+                </p>
+                <input type="file" id="retryFileInput" accept=".pdf,.jpg,.jpeg,.png" multiple hidden>
+                <button class="btn" id="retryUploadBtn">Abrechnung erneut hochladen</button>
+            </div>
+        `;
+    }
+
     resultPreview.innerHTML = `
         <div style="padding: 40px; text-align: center;">
             <div style="font-size: 48px; margin-bottom: 16px;">&#9888;</div>
             <h3 style="margin-bottom: 12px;">Analyse fehlgeschlagen</h3>
             <p style="color: #6b7280; margin-bottom: 24px;">${escapeHTML(message)}</p>
-            <button class="btn" onclick="resetUpload()">Erneut versuchen</button>
+            ${retryHTML}
+            <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 8px;">
+                <p style="color: #6b7280; font-size: 14px; margin-bottom: 12px;">
+                    Problem besteht weiterhin? Schreiben Sie uns:
+                </p>
+                <a href="mailto:marc@marcboehle.de?subject=Analyse fehlgeschlagen (${currentSessionId || 'keine Session'})&body=Meine Analyse ist fehlgeschlagen. Session: ${currentSessionId || 'unbekannt'}"
+                   style="color: #1a6b4a; font-weight: 600; text-decoration: underline;">
+                    marc@marcboehle.de
+                </a>
+                <p style="color: #9ca3af; font-size: 12px; margin-top: 8px;">Wir melden uns innerhalb von 24 Stunden und finden eine Lösung.</p>
+            </div>
         </div>
     `;
     resultPreview.style.display = 'block';
     resultPreview.style.animation = 'fadeInUp 0.5s ease';
+
+    // Attach retry handlers if applicable
+    if (canRetry) {
+        const retryBtn = document.getElementById('retryUploadBtn');
+        const retryInput = document.getElementById('retryFileInput');
+        retryBtn.addEventListener('click', () => retryInput.click());
+        retryInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                startRetryAnalysis(currentSessionId, files);
+            }
+        });
+    }
+}
+
+// === Retry analysis with re-uploaded files (free) ===
+async function startRetryAnalysis(sessionId, files) {
+    // Show progress spinner
+    resultPreview.style.display = 'none';
+    uploadProgress.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    for (const file of files) {
+        formData.append('files', file);
+    }
+
+    try {
+        const res = await fetch('/api/retry-analysis', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+            uploadProgress.style.display = 'none';
+            analysisError = data.error || 'Erneuter Versuch fehlgeschlagen.';
+            analysisErrorType = 'unknown';
+            showError(analysisError);
+            return;
+        }
+
+        // Re-poll for results
+        animateProgress();
+        pollForResults(sessionId);
+
+    } catch (err) {
+        uploadProgress.style.display = 'none';
+        analysisError = 'Verbindung zum Server fehlgeschlagen. Bitte versuchen Sie es später erneut.';
+        analysisErrorType = 'unknown';
+        showError(analysisError);
+    }
 }
 
 function escapeHTML(str) {

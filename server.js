@@ -23,7 +23,7 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 // File upload config — store in memory, max 20MB
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 20 * 1024 * 1024 },
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
         if (allowed.includes(file.mimetype)) {
@@ -128,6 +128,12 @@ Falls KEINE Fehler gefunden wurden, setze widerspruchsbrief auf null.
 - JEDEN erkennbaren Posten auflisten, auch wenn OK.
 - Auf Deutsch antworten.`;
 
+// === Token cost limits ===
+const MAX_PDF_TEXT_CHARS = 15000;  // ~4K tokens, plenty for a Nebenkostenabrechnung
+const MAX_PDF_BASE64_MB = 5;      // Skip vision for huge PDFs
+const MAX_IMAGE_WIDTH = 1200;     // Enough for OCR, saves ~35% tokens vs 1500px
+const IMAGE_QUALITY = 75;
+
 // === Image compression ===
 async function compressImage(buffer, mimetype) {
     const metadata = await sharp(buffer).metadata();
@@ -135,16 +141,14 @@ async function compressImage(buffer, mimetype) {
 
     let processed = sharp(buffer);
 
-    // Resize if wider than 1500px (plenty for OCR)
-    if (metadata.width > 1500) {
-        processed = processed.resize(1500, null, { withoutEnlargement: true });
+    if (metadata.width > MAX_IMAGE_WIDTH) {
+        processed = processed.resize(MAX_IMAGE_WIDTH, null, { withoutEnlargement: true });
     }
 
-    // Compress as JPEG (most phone photos are JPEG anyway)
-    const result = await processed.jpeg({ quality: 80 }).toBuffer();
+    const result = await processed.jpeg({ quality: IMAGE_QUALITY }).toBuffer();
     const newKB = Math.round(result.length / 1024);
 
-    console.log(`  Image compressed: ${originalKB} KB → ${newKB} KB (${metadata.width}px → max 1500px)`);
+    console.log(`  Image compressed: ${originalKB} KB → ${newKB} KB (${metadata.width}px → max ${MAX_IMAGE_WIDTH}px)`);
     return result;
 }
 
@@ -156,12 +160,41 @@ async function buildContentFromFiles(files) {
         if (file.mimetype === 'application/pdf') {
             try {
                 const pdfData = await pdfParse(file.buffer);
-                const text = pdfData.text.trim();
+                let text = pdfData.text.trim();
 
                 if (text.length > 100) {
+                    // Cap text to limit token usage
+                    if (text.length > MAX_PDF_TEXT_CHARS) {
+                        console.log(`  PDF text truncated: ${text.length} → ${MAX_PDF_TEXT_CHARS} chars`);
+                        text = text.substring(0, MAX_PDF_TEXT_CHARS) + '\n\n[... Text gekürzt, restliche Seiten nicht einbezogen ...]';
+                    }
                     content.push({
                         type: 'text',
                         text: `--- PDF: ${file.originalname} ---\n${text}\n---`
+                    });
+                } else {
+                    // No usable text — use vision, but only if PDF isn't huge
+                    const sizeMB = file.buffer.length / (1024 * 1024);
+                    if (sizeMB > MAX_PDF_BASE64_MB) {
+                        console.log(`  PDF too large for vision (${sizeMB.toFixed(1)} MB), skipping`);
+                        content.push({
+                            type: 'text',
+                            text: `--- PDF: ${file.originalname} ---\n[Dokument konnte nicht gelesen werden. Die Datei ist zu groß (${sizeMB.toFixed(1)} MB). Bitte laden Sie einzelne Fotos der Seiten hoch.]\n---`
+                        });
+                    } else {
+                        content.push({
+                            type: 'document',
+                            source: { type: 'base64', media_type: 'application/pdf', data: file.buffer.toString('base64') }
+                        });
+                    }
+                }
+            } catch (pdfErr) {
+                const sizeMB = file.buffer.length / (1024 * 1024);
+                if (sizeMB > MAX_PDF_BASE64_MB) {
+                    console.log(`  PDF parse failed and too large for vision (${sizeMB.toFixed(1)} MB)`);
+                    content.push({
+                        type: 'text',
+                        text: `--- PDF: ${file.originalname} ---\n[Dokument konnte nicht gelesen werden. Bitte laden Sie Fotos der einzelnen Seiten hoch.]\n---`
                     });
                 } else {
                     content.push({
@@ -169,11 +202,6 @@ async function buildContentFromFiles(files) {
                         source: { type: 'base64', media_type: 'application/pdf', data: file.buffer.toString('base64') }
                     });
                 }
-            } catch (pdfErr) {
-                content.push({
-                    type: 'document',
-                    source: { type: 'base64', media_type: 'application/pdf', data: file.buffer.toString('base64') }
-                });
             }
         } else {
             // Compress images before sending
@@ -411,6 +439,27 @@ async function sendResultEmail(email, data, pdfBuffer) {
     }
 }
 
+// === Run analysis with automatic retry for transient errors ===
+async function runAnalysisWithRetry(files, maxRetries = 2) {
+    let lastError;
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+        try {
+            return await runAnalysis(files);
+        } catch (err) {
+            lastError = err;
+            const isTransient = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || !err.status;
+            if (isTransient && attempt <= maxRetries) {
+                const delay = attempt * 3000; // 3s, 6s
+                console.log(`  Retry ${attempt}/${maxRetries} in ${delay/1000}s (${err.message})`);
+                await new Promise(r => setTimeout(r, delay));
+            } else {
+                throw err;
+            }
+        }
+    }
+    throw lastError;
+}
+
 // === Start background analysis for a session ===
 function startBackgroundAnalysis(sessionId) {
     if (activeAnalyses.has(sessionId)) return; // Already running
@@ -420,7 +469,7 @@ function startBackgroundAnalysis(sessionId) {
 
     activeAnalyses.add(sessionId);
 
-    runAnalysis(pending.files)
+    runAnalysisWithRetry(pending.files)
         .then(async (result) => {
             completedResults.set(sessionId, { result, createdAt: Date.now() });
             console.log(`Analysis complete for ${sessionId}: ${result.fehler_anzahl} errors, ${result.warnungen_anzahl} warnings`);
@@ -437,10 +486,17 @@ function startBackgroundAnalysis(sessionId) {
         })
         .catch(err => {
             console.error(`Analysis failed for ${sessionId}:`, err.message);
-            let errorMsg = 'Analyse fehlgeschlagen. Bitte versuchen Sie es erneut.';
-            if (err.status === 401) errorMsg = 'Ungültiger API-Key.';
-            if (err.status === 429) errorMsg = 'Zu viele Anfragen. Bitte warten Sie einen Moment.';
-            completedResults.set(sessionId, { error: errorMsg, createdAt: Date.now() });
+            let errorType = 'analysis_failed';
+            let errorMsg = 'Die Analyse konnte leider nicht abgeschlossen werden.';
+            if (err.status === 401) {
+                errorType = 'config_error';
+                errorMsg = 'Interner Konfigurationsfehler. Bitte kontaktieren Sie den Support.';
+            }
+            if (err.status === 429) {
+                errorType = 'rate_limit';
+                errorMsg = 'Unser System ist gerade überlastet. Bitte versuchen Sie es in wenigen Minuten erneut.';
+            }
+            completedResults.set(sessionId, { error: errorMsg, errorType, createdAt: Date.now() });
         })
         .finally(() => {
             activeAnalyses.delete(sessionId);
@@ -449,7 +505,7 @@ function startBackgroundAnalysis(sessionId) {
 }
 
 // === STEP 1: Upload files + create Stripe Checkout Session ===
-app.post('/api/create-checkout', upload.array('files', 10), async (req, res) => {
+app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
@@ -514,7 +570,7 @@ app.get('/api/result/:sessionId', async (req, res) => {
         const cached = completedResults.get(sessionId);
         if (cached) {
             if (cached.error) {
-                return res.json({ status: 'error', error: cached.error });
+                return res.json({ status: 'error', error: cached.error, errorType: cached.errorType || 'unknown' });
             }
             return res.json({ status: 'done', data: cached.result });
         }
@@ -537,7 +593,11 @@ app.get('/api/result/:sessionId', async (req, res) => {
 
         // Check if files exist
         if (!pendingFiles.has(sessionId)) {
-            return res.json({ status: 'error', error: 'Analyse nicht gefunden. Bitte laden Sie Ihre Abrechnung erneut hoch.' });
+            return res.json({
+                status: 'error',
+                error: 'Ihre Dateien konnten nicht mehr gefunden werden. Bitte laden Sie Ihre Abrechnung kostenlos erneut hoch.',
+                errorType: 'files_expired'
+            });
         }
 
         // Start analysis in background
@@ -547,6 +607,51 @@ app.get('/api/result/:sessionId', async (req, res) => {
     } catch (err) {
         console.error('Result check error:', err);
         res.json({ status: 'error', error: 'Fehler bei der Abfrage. Bitte versuchen Sie es erneut.' });
+    }
+});
+
+// === STEP 3: Retry analysis with re-uploaded files (free, payment already verified) ===
+app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
+    try {
+        const sessionId = req.body.session_id;
+        if (!sessionId) {
+            return res.status(400).json({ error: 'Keine Session-ID angegeben.' });
+        }
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
+        }
+
+        // Verify payment with Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        if (session.payment_status !== 'paid') {
+            return res.status(403).json({ error: 'Zahlung nicht gefunden.' });
+        }
+
+        // Clear any old error result for this session
+        completedResults.delete(sessionId);
+        activeAnalyses.delete(sessionId);
+
+        // Store new files
+        pendingFiles.set(sessionId, {
+            files: req.files.map(f => ({
+                originalname: f.originalname,
+                mimetype: f.mimetype,
+                buffer: f.buffer,
+                size: f.size,
+            })),
+            email: session.customer_email || undefined,
+            createdAt: Date.now(),
+        });
+
+        console.log(`Retry analysis for ${sessionId}: ${req.files.length} new file(s)`);
+
+        // Start analysis
+        startBackgroundAnalysis(sessionId);
+        res.json({ status: 'processing' });
+
+    } catch (err) {
+        console.error('Retry analysis error:', err);
+        res.status(500).json({ error: 'Erneuter Versuch fehlgeschlagen. Bitte kontaktieren Sie marc@marcboehle.de' });
     }
 });
 
