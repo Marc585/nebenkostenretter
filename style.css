@@ -23,6 +23,9 @@
     --orange: #b7791f;
     --orange-light: #fef3c7;
     --orange-bg: #fffbeb;
+    --blue: #2563eb;
+    --blue-light: #dbeafe;
+    --blue-bg: #eff6ff;
     --border: #e2dfd9;
     --border-light: #f0ede8;
     --shadow: 0 1px 3px rgba(0,0,0,0.08);
@@ -315,6 +318,7 @@ a { color: var(--primary); text-decoration: none; }
 .result-item { padding: 20px 24px; border-radius: var(--radius); margin-bottom: 4px; }
 .result-item.red { background: var(--red-bg); }
 .result-item.orange { background: var(--orange-bg); }
+.result-item.blue { background: var(--blue-bg); }
 .result-item.green { background: var(--green-bg); }
 .result-item-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
 .result-tag {
@@ -323,10 +327,25 @@ a { color: var(--primary); text-decoration: none; }
 }
 .result-tag.red { background: var(--red-light); color: var(--red); }
 .result-tag.orange { background: var(--orange-light); color: var(--orange); }
+.result-tag.blue { background: var(--blue-light); color: var(--blue); }
 .result-tag.green { background: var(--green-light); color: var(--green); }
 .result-betrag { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; flex-shrink: 0; }
 .result-item p { font-size: 15px; color: var(--text-secondary); line-height: 1.6; }
 .result-item-savings { margin-top: 8px; font-size: 14px; font-weight: 600; color: var(--green); }
+.result-item-beweis {
+    margin-top: 6px; font-size: 13px; color: var(--text-muted);
+    font-style: italic; line-height: 1.5;
+    padding-left: 12px; border-left: 2px solid var(--border);
+}
+.result-code {
+    font-size: 10px; font-weight: 600; opacity: 0.7; margin-left: 4px;
+}
+.result-unklar-box {
+    padding: 20px 32px; background: var(--blue-bg); border-top: 1px solid var(--border);
+}
+.result-unklar-box h4 { font-size: 15px; font-weight: 700; color: var(--blue); margin-bottom: 6px; }
+.result-unklar-box p { font-size: 14px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.6; }
+.result-unklar-box ul { margin: 0 0 0 20px; font-size: 14px; color: var(--text-secondary); line-height: 1.7; }
 
 .result-recommendation {
     padding: 20px 32px; background: var(--primary-light);

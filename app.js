@@ -429,6 +429,7 @@ function escapeHTML(str) {
 function renderResults(data) {
     const fehler = data.ergebnisse.filter(e => e.status === 'fehler');
     const warnungen = data.ergebnisse.filter(e => e.status === 'warnung');
+    const unklar = data.ergebnisse.filter(e => e.status === 'unklar');
     const ok = data.ergebnisse.filter(e => e.status === 'ok');
     const totalProbleme = fehler.length + warnungen.length;
     const ersparnis = data.potenzielle_ersparnis_gesamt || 0;
@@ -449,6 +450,11 @@ function renderResults(data) {
     // Warnings
     warnungen.forEach(item => {
         itemsHTML += buildResultItem(item, 'orange', 'Prüfen');
+    });
+
+    // Unklar items
+    unklar.forEach(item => {
+        itemsHTML += buildResultItem(item, 'blue', 'Unklar');
     });
 
     // OK items (collapsed)
@@ -537,6 +543,14 @@ function renderResults(data) {
             ${itemsHTML}
         </div>
 
+        ${unklar.length > 0 && data.unklar_pruefungen && data.unklar_pruefungen.length > 0 ? `
+            <div class="result-unklar-box">
+                <h4>Offene Prüfpunkte</h4>
+                <p>Folgende Punkte konnten nicht abschließend geprüft werden. Fordern Sie ggf. Belegeinsicht beim Vermieter an:</p>
+                <ul>${data.unklar_pruefungen.map(p => `<li>${escapeHTML(p)}</li>`).join('')}</ul>
+            </div>
+        ` : ''}
+
         ${data.empfehlung ? `
             <div class="result-recommendation">
                 <strong>Empfehlung:</strong> ${escapeHTML(data.empfehlung)}
@@ -560,14 +574,16 @@ function renderResults(data) {
 }
 
 function buildResultItem(item, color, label) {
+    const codeLabel = item.fehlercode ? ` <span class="result-code">${escapeHTML(item.fehlercode)}</span>` : '';
     return `
         <div class="result-item ${color}">
             <div class="result-item-header">
-                <span class="result-tag ${color}">${label}</span>
+                <span class="result-tag ${color}">${label}${codeLabel}</span>
                 <strong>${escapeHTML(item.titel || item.posten)}</strong>
                 <span class="result-betrag">${escapeHTML(item.betrag)}</span>
             </div>
             <p>${escapeHTML(item.erklaerung)}</p>
+            ${item.beweis ? `<div class="result-item-beweis">&bdquo;${escapeHTML(item.beweis)}&ldquo;</div>` : ''}
             ${item.ersparnis_geschaetzt > 0 ? `<div class="result-item-savings">Mögliche Ersparnis: ${Math.round(item.ersparnis_geschaetzt)} €</div>` : ''}
         </div>
     `;

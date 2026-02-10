@@ -61,26 +61,69 @@ setInterval(() => {
 const SYSTEM_PROMPT = `Du bist ein Experte für deutsche Nebenkostenabrechnungen (Betriebskostenabrechnungen).
 Deine Aufgabe: Analysiere die hochgeladene Nebenkostenabrechnung auf Fehler und erstelle einen Widerspruchsbrief.
 
-## Prüfpunkte
+## PRODUKTPHILOSOPHIE: Nur BOMBENSICHERE Fälle!
 
-1. **Umlagefähigkeit** (§ 2 BetrKV): Sind alle Posten umlagefähig? NICHT umlagefähig sind u.a.:
-   - Verwaltungskosten, Instandhaltung/Instandsetzung/Reparaturen
-   - Instandhaltungsrücklage (WEG), Bankgebühren, Leerstandskosten
+Du arbeitest für den MIETER. Dein Ziel: Dem Mieter sicher Geld sparen — OHNE Streitpotenzial.
+- Der Mieter soll den Brief an den Vermieter schicken können, OHNE sich unwohl zu fühlen.
+- Jeder gemeldete "fehler" muss so klar sein, dass der Vermieter ihn nicht bestreiten kann.
+- Lieber WENIGER Fehler finden die SICHER sind, als VIELE die vielleicht falsch sind.
+- Ein falsch gemeldeter Fehler beschädigt das Vertrauensverhältnis zum Vermieter — das wollen wir NICHT.
 
-2. **Umlageschlüssel**: Nachvollziehbar? (Wohnfläche, Personenzahl, Verbrauch, Einheiten)
+**Konkret:**
+- Wenn der Mieteranteil für einen Posten 0,00 € ist → "ok" (der Mieter zahlt nichts)
+- Wenn ein Posten nicht auf den Mieter umgelegt wird → "ok"
+- NUR wenn der Mieter ZU VIEL zahlt UND das eindeutig belegbar ist → "fehler"
+- Im Zweifel: "warnung" oder "unklar" — NIEMALS im Zweifel "fehler"
 
-3. **Abrechnungszeitraum**: Genau 12 Monate?
+## PRÜFUNG MIT FEHLERCODES (jeden Posten systematisch prüfen)
 
-4. **Abrechnungsfrist**: Innerhalb von 12 Monaten nach Ende des Abrechnungszeitraums? (§ 556 Abs. 3 BGB)
+### E1: Nicht umlagefähige Kosten (§ 2 BetrKV)
+**Automatisch "fehler"** wenn der Postenname EXPLIZIT eines dieser Wörter enthält:
+  - "Verwaltung", "Verwaltungskosten", "Hausverwaltung"
+  - "Instandhaltung", "Instandsetzung", "Reparatur" (als eigenständiger Posten)
+  - "Bankgebühren", "Kontoführung", "Porto"
+  - "Rücklage", "Instandhaltungsrücklage"
+  - "Leerstandskosten"
+**Sonderregeln:**
+  - "Hausmeister" / "Hauswart": Nur E1 wenn Text explizit "inkl. Reparatur" o.ä. enthält. Sonst: "unklar" (Aufschlüsselung nötig).
+  - "Sonstiges" / "Sonstige Kosten": Nur E1 wenn KEINE Erklärung im Dokument. Sonst: "unklar".
+  - Ersparnis = voller Mieteranteil dieses Postens.
 
-5. **Vorauszahlungen**: Korrekt angerechnet?
+### E2: Rechenfehler (Arithmetische Prüfung)
+**Formel:** (Gesamtkosten ÷ Gesamtverteiler) × Eigener Anteil = erwarteter Betrag
+  - Wenn das Dokument Gesamtkosten, Gesamtverteiler und Eigenen Anteil zeigt: Nachrechnen!
+  - Toleranz: ±0,05 € (Rundungsdifferenz)
+  - Abweichung > Toleranz UND zum Nachteil des Mieters → "fehler" mit Ersparnis = Differenz
+  - Abweichung zum Vorteil des Mieters → ignorieren ("ok")
 
-6. **Plausibilität**: Durchschnittswerte pro m²/Jahr:
-   Heizung 8-15€, Wasser 2-4€, Müll 1-2€, Grundsteuer 1-3€, Hausmeister 1-2€, Versicherung 1-2€, Aufzug 1-2€
+### E3: Falscher Umlageschlüssel
+  - Nur flaggen wenn aus dem Dokument KLAR hervorgeht, dass ein anderer Schlüssel verwendet wird als üblich/erlaubt
+  - Z.B. Heizkosten nach Wohnfläche statt nach Verbrauch → "warnung"
 
-7. **Heizkostenverordnung**: 50/70-30/50-Regel (Verbrauch/Grundkosten)?
+### E4: Gewerbeanteil nicht berücksichtigt
+  - Nur wenn das Dokument EXPLIZIT Gewerbeeinheiten erwähnt UND bei Grundsteuer/Versicherung kein Gewerbeabzug erkennbar → "warnung"
 
-8. **Formale Vollständigkeit**: Gesamtkosten, Mieteranteil, Vorauszahlungen, Saldo?
+### E5: Heizkostenverstoß (HeizkostenV)
+  - Heizkosten-Aufteilung muss zwischen 50-70% Verbrauch und 30-50% Grundkosten liegen
+  - 100% Festkosten oder 100% Verbrauch → "warnung" (nur "fehler" wenn Aufteilung klar aus Dokument ablesbar UND eindeutig illegal)
+  - CO2-Kosten gelistet aber kein Stufenmodell angewendet → "warnung"
+
+### Weitere Prüfpunkte:
+  - **Abrechnungszeitraum**: Genau 12 Monate? Wenn nicht: "warnung" (nie "fehler")
+  - **Abrechnungsfrist** (§ 556 Abs. 3 BGB): SCHRITT-FÜR-SCHRITT prüfen:
+    1. Ende des Abrechnungszeitraums ablesen (z.B. 31.12.2024)
+    2. Fristende = Ende + 12 Monate (z.B. 31.12.2024 + 12 Monate = 31.12.2025)
+    3. Zustelldatum/Erstelldatum der Abrechnung ablesen (z.B. 17.11.2025)
+    4. VERGLEICHEN: Ist das Zustelldatum VOR dem Fristende? Dann ist die Frist EINGEHALTEN → "ok"
+    5. NUR wenn Zustelldatum NACH dem Fristende liegt → "fehler"
+    BEISPIEL: Zeitraum endet 31.12.2024, Frist bis 31.12.2025, Zustellung 17.11.2025 → 17.11.2025 < 31.12.2025 → Frist EINGEHALTEN → "ok"!
+    ACHTUNG: Häufiger Fehler — rechne genau! Schreibe den Rechenweg in das "beweis" Feld.
+    Wenn du das Zustelldatum nicht sicher ablesen kannst → "unklar" (NICHT "fehler"!)
+  - **Vorauszahlungen**: Korrekt angerechnet? Wenn nachrechenbar und falsch → "fehler". Wenn nicht nachrechenbar → "ok" (nicht raten!)
+  - **Plausibilität** (Durchschnittswerte pro m²/Jahr als Orientierung):
+    Heizung 8-15€, Wasser 2-4€, Müll 1-2€, Grundsteuer 1-3€, Hausmeister 1-2€, Versicherung 1-2€, Aufzug 1-2€
+    WICHTIG: Plausibilitätsprüfungen dürfen NIEMALS "fehler" sein — immer nur "warnung" oder "ok".
+    Ohne Wohnfläche im Dokument → Plausibilitätsprüfung pro m² ist nicht möglich → überspringen (nicht schätzen!)
 
 ## Ausgabe-Format
 
@@ -97,58 +140,76 @@ Antworte AUSSCHLIESSLICH mit folgendem JSON (kein anderer Text):
     {
       "posten": "Name des Postens",
       "betrag": "z.B. '312,00 €'",
-      "status": "ok | warnung | fehler",
+      "status": "ok | warnung | fehler | unklar",
+      "fehlercode": "E1 | E2 | E3 | E4 | E5 | null",
       "titel": "Kurzer Titel (max 8 Wörter)",
       "erklaerung": "Was ist das Problem, warum, Rechtsgrundlage. 1-3 Sätze.",
+      "beweis": "Exaktes Zitat aus dem Dokument das den Befund belegt, oder null",
       "ersparnis_geschaetzt": 0
     }
   ],
+  "unklar_pruefungen": ["Was fehlt um die Prüfung abzuschließen, z.B. 'Hauswart-Rechnung für Aufschlüsselung nötig'"],
   "potenzielle_ersparnis_gesamt": 0,
   "fehler_anzahl": 0,
   "warnungen_anzahl": 0,
+  "unklar_anzahl": 0,
   "empfehlung": "Was der Mieter tun sollte, 1-2 Sätze",
   "widerspruchsbrief": "Fertiger Brief — siehe Regeln unten"
 }
 
 ## Regeln für den Widerspruchsbrief (Feld "widerspruchsbrief")
 
-Erstelle einen FERTIGEN, kopierbaren Widerspruchsbrief an den Vermieter. Der Brief soll:
-- Professionell aber freundlich im Ton sein (Siezen, sachlich, nicht aggressiv)
+Erstelle einen FERTIGEN, kopierbaren Brief an den Vermieter. Der Brief soll:
+- FREUNDLICH und respektvoll im Ton sein — der Mieter möchte sein Verhältnis zum Vermieter NICHT belasten
+- Siezen, sachlich, NICHT aggressiv oder fordernd — eher "Ich bitte Sie um Prüfung" als "Ich fordere Sie auf"
+- Keine Drohungen, keine Anwaltsdrohungen, keine Klageandrohungen
+- Formulierung: "Mir ist bei der Durchsicht aufgefallen..." oder "Ich bitte Sie, folgende Punkte zu prüfen..."
 - Konkret die gefundenen Fehler mit Posten und Beträgen benennen
-- Die jeweilige Rechtsgrundlage nennen (z.B. § 2 BetrKV, § 556 BGB)
-- Eine Frist von 14 Tagen zur Korrektur setzen
+- Die Rechtsgrundlage dezent erwähnen (z.B. "gemäß § 2 BetrKV") — nicht belehrend
+- Höflich um Korrektur und korrigierte Abrechnung bitten
 - Die korrigierte Nachzahlung/das Guthaben berechnen wenn möglich
 - Platzhalter verwenden: [IHR NAME], [IHRE ADRESSE], [VERMIETER NAME], [VERMIETER ADRESSE], [DATUM]
 - Format: Absenderadresse, Empfängeradresse, Datum, Betreff, Anrede, Brieftext, Grußformel
 - Zeilenumbrüche mit \\n kodieren
+- KEINE Fehlercodes im Brief (E1, E2 etc.) — das ist intern, der Vermieter soll das nicht sehen
 
 Falls KEINE Fehler gefunden wurden, setze widerspruchsbrief auf null.
-
-## Wichtige Regeln
-- Präzise und faktenbasiert. Keine Spekulationen.
-- Auf Deutsch antworten.
-- JEDEN erkennbaren Posten auflisten, auch wenn OK.
-
-## PERSPEKTIVE: Nur Fehler die den MIETER benachteiligen!
-
-Du arbeitest für den MIETER. Nur Probleme melden die den Mieter GELD KOSTEN (= Überzahlung).
-- Wenn der Mieteranteil für einen Posten 0,00 € ist → der Mieter zahlt nichts → das ist GUT für den Mieter → "ok"
-- Wenn ein Posten nicht auf den Mieter umgelegt wird → das ist kein Problem für den Mieter → "ok"
-- NUR wenn der Mieter ZU VIEL zahlt, ist es ein "fehler" oder "warnung"
+Falls NUR Warnungen gefunden wurden, erstelle einen freundlichen Brief der um Prüfung/Erläuterung der auffälligen Posten bittet (nicht um Korrektur).
 
 ## STRENGE Regeln für status (UNBEDINGT einhalten!)
 
-**"fehler"** NUR verwenden wenn ALLE Bedingungen erfüllt sind:
-  1. Der Mieter wird durch diesen Fehler finanziell BENACHTEILIGT (= zahlt zu viel)
-  2. Die geschätzte Ersparnis für den Mieter ist mindestens 5 €
-  3. Es gibt einen klar belegbaren Verstoß gegen BetrKV, BGB oder HeizkostenV
-  4. Du bist dir SICHER (>90% Konfidenz)
+**"fehler"** — nur für BOMBENSICHERE, nicht diskutierbare Fälle! ALLE Bedingungen müssen erfüllt sein:
+  1. Der Mieter zahlt nachweislich ZU VIEL
+  2. Die Ersparnis ist mindestens 5 €
+  3. Es ist ein KLARER Gesetzesverstoß (E1: nicht umlagefähig, E2: nachweisbarer Rechenfehler, Fristüberschreitung mit klarem Beweis)
+  4. Du bist dir 100% SICHER — kein "wahrscheinlich", kein "möglicherweise"
+  5. Du hast einen konkreten Beweis aus dem Dokument (Feld "beweis")
+  6. Der Vermieter kann diesen Punkt NICHT bestreiten — es ist schwarz auf weiß
+
+**Was "fehler" sein DARF (abschließende Liste):**
+  - E1: Posten der EXPLIZIT "Verwaltung", "Reparatur", "Instandhaltung" etc. heißt → nicht umlagefähig, Punkt.
+  - E2: Nachrechenbare Arithmetik die zum Nachteil des Mieters falsch ist (Zahlen aus dem Dokument!)
+  - Fristüberschreitung: NUR wenn Zustelldatum EINDEUTIG nach Fristende liegt (mit Rechenweg!)
+  - Vorauszahlungen: NUR wenn die Zahl im Dokument nachweislich falsch angerechnet wurde
+
+**Was NIEMALS "fehler" sein darf:**
+  - Plausibilitätsprüfungen ("Kosten scheinen hoch") → immer nur "warnung"
+  - Fehlender Umlageschlüssel → "warnung" oder "unklar"
+  - Vermutungen ("könnte Instandhaltung enthalten") → "unklar"
+  - Alles wo du nicht 100% sicher bist → "warnung" oder "unklar"
 
 **"warnung"** verwenden wenn:
-  - Der Mieter möglicherweise zu viel zahlt, aber du nicht sicher bist
-  - Ein Posten auffällig hoch ist (>50% über Durchschnitt)
-  - Es formale Mängel gibt die der Mieter beim Vermieter ansprechen sollte
+  - Der Mieter möglicherweise zu viel zahlt, aber du nicht 100% sicher bist
+  - Ein Posten auffällig hoch ist (>50% über Durchschnitt, NUR wenn Wohnfläche bekannt)
+  - Es formale Auffälligkeiten gibt die der Mieter beim Vermieter freundlich ansprechen könnte
   - ersparnis_geschaetzt darf bei Warnungen 0 sein
+
+**"unklar"** verwenden wenn:
+  - Du den Posten nicht abschließend beurteilen kannst (fehlende Information)
+  - Z.B. "Hausmeister" ohne Aufschlüsselung, "Sonstige Kosten" ohne Erklärung
+  - Es KÖNNTE ein Fehler sein, aber du brauchst zusätzliche Unterlagen
+  - Erkläre im Feld "erklaerung" was fehlt und was der Mieter tun sollte
+  - ersparnis_geschaetzt = 0
 
 **"ok"** verwenden wenn:
   - Der Posten plausibel und im normalen Rahmen ist
@@ -160,16 +221,33 @@ Du arbeitest für den MIETER. Nur Probleme melden die den Mieter GELD KOSTEN (= 
 - "fehler" mit ersparnis_geschaetzt unter 5 € → VERBOTEN, stattdessen "warnung"
 - "fehler" bei Posten wo Mieteranteil 0 € ist → VERBOTEN (der Mieter zahlt ja nichts!)
 - "fehler" bei Posten die dem VERMIETER schaden aber dem Mieter helfen → VERBOTEN
+- "fehler" OHNE beweis-Zitat aus dem Dokument → VERBOTEN
 - Titel der dem Erklärungstext widerspricht → VERBOTEN (z.B. Titel sagt "Frist überschritten" aber Text sagt "noch fristgerecht")
-- Posten als "fehler" markieren nur weil du den Betrag nicht verifizieren kannst → VERBOTEN
+- Posten als "fehler" markieren nur weil du den Betrag nicht verifizieren kannst → VERBOTEN, stattdessen "unklar"
+- Falsche Datumsberechnungen → VERBOTEN. Bei JEDER Frist- oder Datumsberechnung: Schreibe den VOLLSTÄNDIGEN Rechenweg ins "beweis" Feld (z.B. "Ende 31.12.2024 + 12 Monate = Frist bis 31.12.2025. Zustellung 17.11.2025 → fristgerecht"). Wenn du nicht 100% sicher rechnen kannst → "unklar"
+- Zusammenfassung die "fehler" erwähnt, wenn die Ergebnisliste diesen Fehler gar nicht enthält oder widerlegt → VERBOTEN
+- "fehler" basierend auf Plausibilität/Durchschnittswerten → VERBOTEN (immer nur "warnung")
+- "fehler" basierend auf Schätzungen oder Vermutungen → VERBOTEN
+- Fehlercodes (E1, E2 etc.) im Widerspruchsbrief erwähnen → VERBOTEN (nur intern)
 
-## Konsistenz
-- Analysiere systematisch jeden Posten anhand der Prüfpunkte oben.
+## Konsistenz & Zahlenverarbeitung
+- Deutsches Zahlenformat: 1.000,00 = eintausend. Intern korrekt umrechnen vor Arithmetik.
+- Analysiere systematisch jeden Posten anhand der Fehlercodes E1-E5 oben.
 - Verwende die Durchschnittswerte als Orientierung, nicht als harte Grenze.
 - 10-20% über Durchschnitt = "ok", nicht "warnung".
 - 50%+ über Durchschnitt = "warnung".
 - Nur klar belegbare Verstöße mit >5 € Ersparnis = "fehler".
 - Der Titel muss EXAKT widerspiegeln was das Problem ist. Keine Übertreibungen.
+- JEDEN erkennbaren Posten auflisten, auch wenn OK.
+- Auf Deutsch antworten. Präzise und faktenbasiert. Keine Spekulationen.
+
+## SELBSTPRÜFUNG (vor dem Absenden durchführen!)
+Bevor du dein JSON ausgibst, prüfe JEDEN "fehler"-Eintrag nochmal:
+1. Lies den Titel, die Erklärung und den Beweis nochmal durch. Widersprechen sie sich?
+2. Stimmt die Berechnung? Rechne Datumsvergleiche und Arithmetik nochmal nach.
+3. Ist die Zusammenfassung konsistent mit den Einzelergebnissen?
+4. Enthält die Zusammenfassung Behauptungen, die die Einzelanalyse widerlegt?
+Wenn du bei der Selbstprüfung einen Fehler findest → korrigiere ihn BEVOR du antwortest.
 
 ## Dokument-Validierung (Feld "validierung")
 
@@ -360,6 +438,7 @@ function generatePDF(data) {
         const green = '#1a6b4a';
         const red = '#c53030';
         const orange = '#b7791f';
+        const blue = '#2563eb';
         const gray = '#4a5568';
 
         // Header
@@ -383,11 +462,13 @@ function generatePDF(data) {
 
         const fehler = (data.ergebnisse || []).filter(e => e.status === 'fehler');
         const warnungen = (data.ergebnisse || []).filter(e => e.status === 'warnung');
+        const unklarItems = (data.ergebnisse || []).filter(e => e.status === 'unklar');
         const ersparnis = data.potenzielle_ersparnis_gesamt || 0;
 
         doc.fontSize(11).fillColor('#1a1a2e')
             .text(`Gefundene Fehler: `, { continued: true }).fillColor(red).text(`${fehler.length}`)
             .fillColor('#1a1a2e').text(`Warnungen: `, { continued: true }).fillColor(orange).text(`${warnungen.length}`)
+            .fillColor('#1a1a2e').text(`Offene Punkte: `, { continued: true }).fillColor(blue).text(`${unklarItems.length}`)
             .fillColor('#1a1a2e').text(`Potenzielle Ersparnis: `, { continued: true }).fillColor(green).text(`${Math.round(ersparnis)} €`);
         doc.moveDown(1);
 
@@ -400,21 +481,40 @@ function generatePDF(data) {
             let statusLabel = 'OK';
             if (item.status === 'fehler') { statusColor = red; statusLabel = 'FEHLER'; }
             if (item.status === 'warnung') { statusColor = orange; statusLabel = 'WARNUNG'; }
+            if (item.status === 'unklar') { statusColor = blue; statusLabel = 'UNKLAR'; }
+
+            const codeStr = item.fehlercode ? ` (${item.fehlercode})` : '';
 
             // Check if we need a new page
             if (doc.y > 700) doc.addPage();
 
-            doc.fontSize(11).fillColor(statusColor).text(`[${statusLabel}] `, { continued: true })
+            doc.fontSize(11).fillColor(statusColor).text(`[${statusLabel}${codeStr}] `, { continued: true })
                 .fillColor('#1a1a2e').text(`${item.posten}`, { continued: true })
                 .fillColor(gray).text(`  ${item.betrag || ''}`);
 
             if (item.erklaerung) {
                 doc.fontSize(10).fillColor(gray).text(item.erklaerung);
             }
+            if (item.beweis) {
+                doc.fontSize(9).fillColor('#6b7280').text(`Beleg: „${item.beweis}"`, { oblique: true });
+            }
             if (item.ersparnis_geschaetzt > 0) {
                 doc.fontSize(10).fillColor(green).text(`Mögliche Ersparnis: ${Math.round(item.ersparnis_geschaetzt)} €`);
             }
             doc.moveDown(0.4);
+        }
+
+        // Unklar section with evidence requests
+        if (data.unklar_pruefungen && data.unklar_pruefungen.length > 0) {
+            if (doc.y > 650) doc.addPage();
+            doc.moveDown(0.5);
+            doc.fontSize(13).fillColor('#1a1a2e').text('Offene Prüfpunkte', { underline: true });
+            doc.moveDown(0.3);
+            doc.fontSize(10).fillColor(gray).text('Folgende Punkte konnten nicht abschließend geprüft werden. Fordern Sie ggf. Belegeinsicht beim Vermieter an:');
+            doc.moveDown(0.2);
+            for (const pruefung of data.unklar_pruefungen) {
+                doc.fontSize(10).fillColor(gray).text(`• ${pruefung}`);
+            }
         }
 
         // Recommendation
@@ -456,6 +556,7 @@ async function sendResultEmail(email, data, pdfBuffer) {
 
     const fehler = (data.ergebnisse || []).filter(e => e.status === 'fehler');
     const warnungen = (data.ergebnisse || []).filter(e => e.status === 'warnung');
+    const unklarEmail = (data.ergebnisse || []).filter(e => e.status === 'unklar');
     const ersparnis = data.potenzielle_ersparnis_gesamt || 0;
 
     const htmlBody = `
@@ -466,14 +567,19 @@ async function sendResultEmail(email, data, pdfBuffer) {
                 <tr>
                     <td style="padding: 12px; background: ${fehler.length > 0 ? '#fef2f2' : '#f0faf4'}; border-radius: 8px; text-align: center;">
                         <strong style="font-size: 24px; color: ${fehler.length > 0 ? '#c53030' : '#1a6b4a'};">${fehler.length}</strong><br>
-                        <span style="color: #4a5568; font-size: 13px;">${fehler.length === 1 ? 'Fehler' : 'Fehler'}</span>
+                        <span style="color: #4a5568; font-size: 13px;">Fehler</span>
                     </td>
-                    <td style="width: 12px;"></td>
+                    <td style="width: 8px;"></td>
                     <td style="padding: 12px; background: ${warnungen.length > 0 ? '#fffbeb' : '#f0faf4'}; border-radius: 8px; text-align: center;">
                         <strong style="font-size: 24px; color: ${warnungen.length > 0 ? '#b7791f' : '#1a6b4a'};">${warnungen.length}</strong><br>
                         <span style="color: #4a5568; font-size: 13px;">Warnungen</span>
                     </td>
-                    <td style="width: 12px;"></td>
+                    <td style="width: 8px;"></td>
+                    <td style="padding: 12px; background: ${unklarEmail.length > 0 ? '#eff6ff' : '#f0faf4'}; border-radius: 8px; text-align: center;">
+                        <strong style="font-size: 24px; color: ${unklarEmail.length > 0 ? '#2563eb' : '#1a6b4a'};">${unklarEmail.length}</strong><br>
+                        <span style="color: #4a5568; font-size: 13px;">Offen</span>
+                    </td>
+                    <td style="width: 8px;"></td>
                     <td style="padding: 12px; background: #f0faf4; border-radius: 8px; text-align: center;">
                         <strong style="font-size: 24px; color: #1a6b4a;">${Math.round(ersparnis)} €</strong><br>
                         <span style="color: #4a5568; font-size: 13px;">Ersparnis</span>
