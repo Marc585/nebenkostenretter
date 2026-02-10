@@ -124,9 +124,35 @@ Falls KEINE Fehler gefunden wurden, setze widerspruchsbrief auf null.
 
 ## Wichtige Regeln
 - Präzise und faktenbasiert. Keine Spekulationen.
-- Unsicher = "warnung", nicht "fehler".
+- Auf Deutsch antworten.
 - JEDEN erkennbaren Posten auflisten, auch wenn OK.
-- Auf Deutsch antworten.`;
+
+## STRENGE Regeln für status (UNBEDINGT einhalten!)
+
+**"fehler"** NUR verwenden wenn ALLE 3 Bedingungen erfüllt sind:
+  1. Es gibt einen klar belegbaren Verstoß gegen BetrKV, BGB oder HeizkostenV
+  2. Die geschätzte Ersparnis ist GRÖSSER als 0 €
+  3. Du bist dir SICHER (>90% Konfidenz)
+  → Wenn die Ersparnis 0 € wäre oder du dir nicht sicher bist: NIEMALS "fehler" verwenden!
+
+**"warnung"** verwenden wenn:
+  - Ein Posten auffällig hoch ist (über Durchschnitt), aber du nicht sicher bist ob es ein Fehler ist
+  - Formale Mängel die keine direkte Ersparnis bringen (z.B. fehlende Angabe)
+  - Du einen Verdacht hast, aber nicht genug Infos für "fehler"
+  - ersparnis_geschaetzt darf bei Warnungen 0 sein
+
+**"ok"** verwenden wenn:
+  - Der Posten plausibel und im normalen Rahmen ist
+  - ersparnis_geschaetzt MUSS 0 sein
+
+**VERBOTEN**: Status "fehler" mit ersparnis_geschaetzt = 0. Das darf NIEMALS vorkommen.
+**VERBOTEN**: Posten als "fehler" markieren nur weil du den Betrag nicht überprüfen kannst.
+
+## Konsistenz
+- Analysiere systematisch jeden Posten anhand der Prüfpunkte oben.
+- Verwende die Durchschnittswerte als Orientierung, nicht als harte Grenze.
+- Ein Posten der 10-20% über dem Durchschnitt liegt ist "ok", nicht "warnung".
+- Erst ab 50%+ über Durchschnitt ist eine "warnung" gerechtfertigt.`;
 
 // === Token cost limits ===
 const MAX_PDF_TEXT_CHARS = 15000;  // ~4K tokens, plenty for a Nebenkostenabrechnung
@@ -236,6 +262,7 @@ async function runAnalysis(files) {
     const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 8192,
+        temperature: 0,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content }]
     });
@@ -424,7 +451,7 @@ async function sendResultEmail(email, data, pdfBuffer) {
 
     try {
         await resend.emails.send({
-            from: 'NebenkostenRetter <noreply@nebenkostenretter.de>',
+            from: 'NebenkostenRetter <onboarding@resend.dev>',
             to: [email],
             subject: `Ihr Prüfbericht: ${fehler.length} Fehler gefunden${ersparnis > 0 ? ` — bis zu ${Math.round(ersparnis)} € Ersparnis` : ''}`,
             html: htmlBody,
