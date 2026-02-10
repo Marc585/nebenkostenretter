@@ -1,0 +1,525 @@
+// === Elements ===
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+const fileList = document.getElementById('fileList');
+const fileListItems = document.getElementById('fileListItems');
+const addMoreBtn = document.getElementById('addMoreBtn');
+const startAnalysisBtn = document.getElementById('startAnalysisBtn');
+const emailInput = document.getElementById('emailInput');
+const uploadProgress = document.getElementById('uploadProgress');
+const resultPreview = document.getElementById('resultPreview');
+
+// Collected files
+let collectedFiles = [];
+
+// === On page load: check if returning from Stripe or resuming session ===
+let analysisResult = null;
+let analysisError = null;
+let apiDone = false;
+
+(function checkSession() {
+    const params = new URLSearchParams(window.location.search);
+    let sessionId = params.get('session_id');
+
+    // If no URL param, check localStorage for a saved session
+    if (!sessionId) {
+        sessionId = localStorage.getItem('nk_session_id');
+    }
+
+    if (sessionId) {
+        // Save to localStorage (backup for reload/close)
+        localStorage.setItem('nk_session_id', sessionId);
+
+        // Clean URL (keep session in localStorage)
+        if (params.has('session_id')) {
+            window.history.replaceState({}, '', '/');
+        }
+
+        // Show progress spinner
+        uploadArea.style.display = 'none';
+        uploadProgress.style.display = 'block';
+
+        // Scroll to upload section
+        setTimeout(() => {
+            document.getElementById('upload').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+
+        // Start spinner + poll for results
+        animateProgress();
+        pollForResults(sessionId);
+    }
+})();
+
+// === Poll server for analysis result ===
+function pollForResults(sessionId) {
+    analysisResult = null;
+    analysisError = null;
+    apiDone = false;
+
+    const poll = async () => {
+        try {
+            const res = await fetch(`/api/result/${encodeURIComponent(sessionId)}`);
+            const data = await res.json();
+
+            if (data.status === 'done') {
+                analysisResult = data.data;
+                apiDone = true;
+                localStorage.removeItem('nk_session_id');
+            } else if (data.status === 'error') {
+                analysisError = data.error;
+                apiDone = true;
+                localStorage.removeItem('nk_session_id');
+            } else if (data.status === 'processing') {
+                // Keep polling every 2 seconds
+                setTimeout(poll, 2000);
+            }
+        } catch (err) {
+            // Network error — retry in 3 seconds
+            setTimeout(poll, 3000);
+        }
+    };
+
+    poll();
+}
+
+// Click to upload
+uploadArea.addEventListener('click', () => fileInput.click());
+
+// Drag events
+uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.classList.add('drag-over');
+});
+
+uploadArea.addEventListener('dragleave', () => {
+    uploadArea.classList.remove('drag-over');
+});
+
+uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('drag-over');
+    addFiles(Array.from(e.dataTransfer.files));
+});
+
+// File input change
+fileInput.addEventListener('change', (e) => {
+    addFiles(Array.from(e.target.files));
+    fileInput.value = '';
+});
+
+// Add more button
+addMoreBtn.addEventListener('click', () => fileInput.click());
+
+// Consent checkbox + email → enable/disable payment button
+const consentCheckbox = document.getElementById('consentCheckbox');
+
+function updateButtonState() {
+    const emailValid = emailInput.value.trim() !== '' && emailInput.validity.valid;
+    startAnalysisBtn.disabled = !(consentCheckbox.checked && emailValid);
+}
+
+consentCheckbox.addEventListener('change', updateButtonState);
+emailInput.addEventListener('input', updateButtonState);
+
+// Start analysis button → now triggers Stripe Checkout
+startAnalysisBtn.addEventListener('click', () => startCheckout());
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function addFiles(files) {
+    const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+
+    for (const file of files) {
+        if (!validTypes.includes(file.type)) {
+            alert(`"${file.name}" wird nicht unterstützt. Nur PDF, JPG, PNG.`);
+            continue;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+            alert(`"${file.name}" ist zu groß. Maximal 20 MB pro Datei.`);
+            continue;
+        }
+        // For PDFs, replace the file list (single PDF = whole document)
+        if (file.type === 'application/pdf') {
+            collectedFiles = [file];
+        } else {
+            collectedFiles.push(file);
+        }
+    }
+
+    if (collectedFiles.length > 0) {
+        renderFileList();
+    }
+}
+
+function renderFileList() {
+    uploadArea.style.display = 'none';
+    fileList.style.display = 'block';
+    resultPreview.style.display = 'none';
+
+    fileListItems.innerHTML = collectedFiles.map((f, i) => `
+        <div class="file-list-item">
+            <span class="file-list-icon">${f.type === 'application/pdf' ? '&#128196;' : '&#128247;'}</span>
+            <span class="file-list-name">${escapeHTML(f.name)}</span>
+            <span class="file-list-size">${formatFileSize(f.size)}</span>
+            <button class="file-list-remove" onclick="removeFile(${i})" title="Entfernen">&times;</button>
+        </div>
+    `).join('');
+}
+
+function removeFile(index) {
+    collectedFiles.splice(index, 1);
+    if (collectedFiles.length === 0) {
+        resetUpload();
+    } else {
+        renderFileList();
+    }
+}
+
+// === Upload files to server + redirect to Stripe Checkout ===
+async function startCheckout() {
+    if (collectedFiles.length === 0) return;
+
+    // Disable button and show loading state
+    startAnalysisBtn.disabled = true;
+    startAnalysisBtn.textContent = 'Wird vorbereitet...';
+
+    const formData = new FormData();
+    for (const file of collectedFiles) {
+        formData.append('files', file);
+    }
+    formData.append('email', emailInput.value.trim());
+
+    try {
+        const res = await fetch('/api/create-checkout', {
+            method: 'POST',
+            body: formData,
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            alert(data.error || 'Fehler beim Erstellen der Zahlung.');
+            startAnalysisBtn.disabled = false;
+            startAnalysisBtn.textContent = 'Für 3,99 € prüfen lassen';
+            return;
+        }
+
+        // Redirect to Stripe Checkout
+        window.location.href = data.checkoutUrl;
+
+    } catch (err) {
+        alert('Verbindung zum Server fehlgeschlagen. Läuft der Server?');
+        startAnalysisBtn.disabled = false;
+        startAnalysisBtn.textContent = 'Für 3,99 € prüfen lassen';
+    }
+}
+
+// === Progress animation ===
+function animateProgress() {
+    const spinnerStatus = document.getElementById('spinnerStatus');
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const step4 = document.getElementById('step4');
+    const allSteps = [step1, step2, step3, step4];
+
+    const statusTexts = [
+        'Dokument wird eingelesen...',
+        'Posten werden auf Fehler geprüft...',
+        'Widerspruchsbrief wird erstellt...',
+        'Ergebnis wird zusammengestellt...'
+    ];
+
+    // Reset
+    allSteps.forEach(s => s.classList.remove('active', 'done'));
+    step1.classList.add('active');
+    spinnerStatus.textContent = statusTexts[0];
+
+    // Step 1 → done after 2s
+    setTimeout(() => {
+        step1.classList.remove('active');
+        step1.classList.add('done');
+        step2.classList.add('active');
+        spinnerStatus.textContent = statusTexts[1];
+    }, 2000);
+
+    // Step 2 → done after 6s
+    setTimeout(() => {
+        step2.classList.remove('active');
+        step2.classList.add('done');
+        step3.classList.add('active');
+        spinnerStatus.textContent = statusTexts[2];
+    }, 6000);
+
+    // Step 3 → done after 10s
+    setTimeout(() => {
+        step3.classList.remove('active');
+        step3.classList.add('done');
+        step4.classList.add('active');
+        spinnerStatus.textContent = statusTexts[3];
+    }, 10000);
+
+    // Poll for API completion
+    const pollInterval = setInterval(() => {
+        if (apiDone) {
+            clearInterval(pollInterval);
+
+            // Mark all steps as done
+            allSteps.forEach(s => {
+                s.classList.remove('active');
+                s.classList.add('done');
+            });
+            spinnerStatus.textContent = 'Fertig!';
+
+            setTimeout(() => {
+                uploadProgress.style.display = 'none';
+
+                if (analysisError) {
+                    showError(analysisError);
+                } else {
+                    renderResults(analysisResult);
+                }
+            }, 600);
+        }
+    }, 300);
+}
+
+function showError(message) {
+    resultPreview.innerHTML = `
+        <div style="padding: 40px; text-align: center;">
+            <div style="font-size: 48px; margin-bottom: 16px;">&#9888;</div>
+            <h3 style="margin-bottom: 12px;">Analyse fehlgeschlagen</h3>
+            <p style="color: #6b7280; margin-bottom: 24px;">${escapeHTML(message)}</p>
+            <button class="btn" onclick="resetUpload()">Erneut versuchen</button>
+        </div>
+    `;
+    resultPreview.style.display = 'block';
+    resultPreview.style.animation = 'fadeInUp 0.5s ease';
+}
+
+function escapeHTML(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function renderResults(data) {
+    const fehler = data.ergebnisse.filter(e => e.status === 'fehler');
+    const warnungen = data.ergebnisse.filter(e => e.status === 'warnung');
+    const ok = data.ergebnisse.filter(e => e.status === 'ok');
+    const totalProbleme = fehler.length + warnungen.length;
+    const ersparnis = data.potenzielle_ersparnis_gesamt || 0;
+
+    // Score badge color
+    let scoreClass = 'good';
+    if (fehler.length > 0) scoreClass = 'bad';
+    else if (warnungen.length > 0) scoreClass = 'warn';
+
+    // Build result items HTML
+    let itemsHTML = '';
+
+    // Errors first
+    fehler.forEach(item => {
+        itemsHTML += buildResultItem(item, 'red', 'Fehler');
+    });
+
+    // Warnings
+    warnungen.forEach(item => {
+        itemsHTML += buildResultItem(item, 'orange', 'Prüfen');
+    });
+
+    // OK items (collapsed)
+    if (ok.length > 0) {
+        let okItemsHTML = '';
+        ok.forEach(item => {
+            okItemsHTML += `
+                <div class="result-item green">
+                    <div class="result-item-header">
+                        <span class="result-tag green">OK</span>
+                        <strong>${escapeHTML(item.posten)}</strong>
+                        <span class="result-betrag">${escapeHTML(item.betrag)}</span>
+                    </div>
+                </div>
+            `;
+        });
+        itemsHTML += `
+            <details class="ok-details">
+                <summary class="ok-summary">${ok.length} Posten ohne Beanstandung anzeigen</summary>
+                ${okItemsHTML}
+            </details>
+        `;
+    }
+
+    // Meta info
+    let metaHTML = '';
+    if (data.wohnflaeche_erkannt || data.abrechnungszeitraum) {
+        metaHTML = `<div class="result-meta">`;
+        if (data.abrechnungszeitraum) metaHTML += `<span>Zeitraum: ${escapeHTML(data.abrechnungszeitraum)}</span>`;
+        if (data.wohnflaeche_erkannt) metaHTML += `<span>Wohnfläche: ${escapeHTML(data.wohnflaeche_erkannt)}</span>`;
+        if (data.gesamtkosten_mieter) metaHTML += `<span>Gesamtkosten: ${escapeHTML(data.gesamtkosten_mieter)}</span>`;
+        metaHTML += `</div>`;
+    }
+
+    // Letter section
+    let letterHTML = '';
+    if (data.widerspruchsbrief) {
+        const briefText = data.widerspruchsbrief.replace(/\\n/g, '\n');
+        letterHTML = `
+            <div class="letter-section">
+                <div class="letter-header">
+                    <div class="letter-header-left">
+                        <span class="letter-icon">&#9993;</span>
+                        <div>
+                            <h3>Fertiger Widerspruchsbrief</h3>
+                            <p>Ersetzen Sie die [PLATZHALTER] mit Ihren Daten und schicken Sie den Brief an Ihren Vermieter.</p>
+                        </div>
+                    </div>
+                    <button class="btn btn-sm copy-btn" id="copyLetterBtn">Kopieren</button>
+                </div>
+                <div class="letter-body">
+                    <pre class="letter-text" id="letterText">${escapeHTML(briefText)}</pre>
+                </div>
+                <div class="letter-footer">
+                    <button class="btn copy-btn" id="copyLetterBtn2">Brief in Zwischenablage kopieren</button>
+                </div>
+            </div>
+        `;
+    }
+
+    resultPreview.innerHTML = `
+        <div class="result-header">
+            <div class="result-score ${scoreClass}">
+                <span class="score-number">${totalProbleme}</span>
+                <span class="score-label">${totalProbleme === 1 ? 'Problem gefunden' : 'Probleme gefunden'}</span>
+            </div>
+            ${ersparnis > 0 ? `
+                <div class="result-savings">
+                    <span class="savings-label">Potenzielle Ersparnis</span>
+                    <span class="savings-amount">bis zu ${Math.round(ersparnis)} €</span>
+                </div>
+            ` : `
+                <div class="result-savings">
+                    <span class="savings-amount" style="color: var(--green);">Alles in Ordnung!</span>
+                </div>
+            `}
+        </div>
+
+        ${metaHTML}
+
+        <div class="result-summary">
+            <p>${escapeHTML(data.zusammenfassung)}</p>
+        </div>
+
+        <div class="result-items">
+            ${itemsHTML}
+        </div>
+
+        ${data.empfehlung ? `
+            <div class="result-recommendation">
+                <strong>Empfehlung:</strong> ${escapeHTML(data.empfehlung)}
+            </div>
+        ` : ''}
+
+        ${letterHTML}
+
+        <div class="result-actions">
+            <button class="btn" onclick="resetUpload()">Neue Abrechnung prüfen</button>
+        </div>
+    `;
+
+    resultPreview.style.display = 'block';
+    resultPreview.style.animation = 'fadeInUp 0.5s ease';
+
+    // Attach copy handlers
+    document.querySelectorAll('#copyLetterBtn, #copyLetterBtn2').forEach(btn => {
+        btn.addEventListener('click', () => copyLetter());
+    });
+}
+
+function buildResultItem(item, color, label) {
+    return `
+        <div class="result-item ${color}">
+            <div class="result-item-header">
+                <span class="result-tag ${color}">${label}</span>
+                <strong>${escapeHTML(item.titel || item.posten)}</strong>
+                <span class="result-betrag">${escapeHTML(item.betrag)}</span>
+            </div>
+            <p>${escapeHTML(item.erklaerung)}</p>
+            ${item.ersparnis_geschaetzt > 0 ? `<div class="result-item-savings">Mögliche Ersparnis: ${Math.round(item.ersparnis_geschaetzt)} €</div>` : ''}
+        </div>
+    `;
+}
+
+function copyLetter() {
+    const letterEl = document.getElementById('letterText');
+    if (!letterEl) return;
+    navigator.clipboard.writeText(letterEl.textContent).then(() => {
+        document.querySelectorAll('#copyLetterBtn, #copyLetterBtn2').forEach(btn => {
+            const original = btn.textContent;
+            btn.textContent = 'Kopiert!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = original;
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    });
+}
+
+function resetUpload() {
+    collectedFiles = [];
+    uploadArea.style.display = 'block';
+    fileList.style.display = 'none';
+    uploadProgress.style.display = 'none';
+    resultPreview.style.display = 'none';
+    fileInput.value = '';
+}
+
+// === Smooth Scroll for anchor links ===
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+});
+
+// === Reset: click logo to go back to upload ===
+document.querySelector('.logo').addEventListener('click', (e) => {
+    e.preventDefault();
+    resetUpload();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+// === Add animations ===
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+`;
+document.head.appendChild(style);
+
+// === Intersection Observer for scroll animations ===
+const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            entry.target.style.opacity = '1';
+            entry.target.style.transform = 'translateY(0)';
+        }
+    });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.step, .check-card, .price-card, .faq-item').forEach(el => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(20px)';
+    el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+    observer.observe(el);
+});
