@@ -1,6 +1,10 @@
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk').default;
 const pdfParse = require('pdf-parse');
 const Stripe = require('stripe');
@@ -11,8 +15,23 @@ const { Resend } = require('resend');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.static('.'));
+// Security & performance middleware
+app.use(compression());
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Rate limiting
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 30, // max 30 API requests per window
+    message: { error: 'Zu viele Anfragen. Bitte versuchen Sie es in einigen Minuten erneut.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/api/', apiLimiter);
+
+// Health check for Render
+app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
 // Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -172,6 +191,7 @@ Erstelle einen FERTIGEN, kopierbaren Brief an den Vermieter. Der Brief soll:
 - Format: Absenderadresse, Empfängeradresse, Datum, Betreff, Anrede, Brieftext, Grußformel
 - Zeilenumbrüche mit \\n kodieren
 - KEINE Fehlercodes im Brief (E1, E2 etc.) — das ist intern, der Vermieter soll das nicht sehen
+- Am Ende des Briefs (vor der Grußformel) folgenden Hinweis einfügen: "Dieses Schreiben wurde mit Unterstützung einer softwaregestützten Plausibilitätsprüfung erstellt und stellt keine Rechtsberatung dar."
 
 Falls KEINE Fehler gefunden wurden, setze widerspruchsbrief auf null.
 Falls NUR Warnungen gefunden wurden, erstelle einen freundlichen Brief der um Prüfung/Erläuterung der auffälligen Posten bittet (nicht um Korrektur).
@@ -875,6 +895,85 @@ app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
     }
 });
 
+// === Stripe Webhook (triggers analysis even if user closes browser) ===
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+        // Webhook not configured — skip silently
+        return res.json({ received: true });
+    }
+
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err) {
+        console.error('Webhook signature verification failed:', err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        console.log(`Webhook: checkout.session.completed for ${session.id}`);
+        // Start analysis if files are pending and not already running
+        if (pendingFiles.has(session.id) && !activeAnalyses.has(session.id) && !completedResults.has(session.id)) {
+            startBackgroundAnalysis(session.id);
+        }
+    }
+
+    res.json({ received: true });
+});
+
+// === PDF Download endpoint ===
+app.get('/api/download-pdf/:sessionId', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const cached = completedResults.get(sessionId);
+
+        if (!cached || !cached.result) {
+            return res.status(404).json({ error: 'Kein Ergebnis gefunden.' });
+        }
+
+        const pdfBuffer = await generatePDF(cached.result);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="Pruefbericht-Nebenkosten.pdf"');
+        res.send(pdfBuffer);
+    } catch (err) {
+        console.error('PDF download error:', err.message);
+        res.status(500).json({ error: 'PDF konnte nicht erstellt werden.' });
+    }
+});
+
+// === Reminder opt-in (save email for annual reminder) ===
+app.post('/api/reminder-optin', express.json(), (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Keine E-Mail angegeben.' });
+
+    try {
+        const dataDir = path.join(__dirname, 'data');
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+        const remindersFile = path.join(dataDir, 'reminders.json');
+        let reminders = [];
+        if (fs.existsSync(remindersFile)) {
+            reminders = JSON.parse(fs.readFileSync(remindersFile, 'utf-8'));
+        }
+
+        // Avoid duplicates
+        if (!reminders.some(r => r.email === email)) {
+            reminders.push({ email, createdAt: new Date().toISOString() });
+            fs.writeFileSync(remindersFile, JSON.stringify(reminders, null, 2));
+            console.log(`Reminder opt-in: ${email}`);
+        }
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Reminder opt-in error:', err.message);
+        res.status(500).json({ error: 'Speichern fehlgeschlagen.' });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`\n  NebenkostenRetter Server läuft auf http://localhost:${PORT}\n`);
 
@@ -882,6 +981,7 @@ app.listen(PORT, () => {
         ['ANTHROPIC_API_KEY', 'API-Key'],
         ['STRIPE_SECRET_KEY', 'Stripe-Key'],
         ['RESEND_API_KEY', 'Resend-Key'],
+        ['STRIPE_WEBHOOK_SECRET', 'Webhook-Secret (optional)'],
     ];
 
     let allGood = true;

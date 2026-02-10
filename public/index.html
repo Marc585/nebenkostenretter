@@ -25,8 +25,6 @@
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 
     <!-- JSON-LD Structured Data -->
@@ -168,6 +166,9 @@
         ]
     }
     </script>
+    <!-- Plausible Analytics (DSGVO-konform, kein Cookie-Banner nötig) -->
+    <!-- Aktivieren: Registrieren bei https://plausible.io und Domain hinzufügen -->
+    <!-- <script defer data-domain="nebenkostenretter.de" src="https://plausible.io/js/script.js"></script> -->
 </head>
 <body>
 
@@ -213,7 +214,7 @@
                     <div class="trust-icon">&#128274;</div>
                     <div>
                         <strong>Ihre Daten sind sicher</strong>
-                        <span>Verschlüsselt & sofort gelöscht</span>
+                        <span>Verschlüsselt &amp; sofort gelöscht</span>
                     </div>
                 </div>
                 <div class="trust-item">
@@ -221,6 +222,13 @@
                     <div>
                         <strong>Einmalig 3,99 €</strong>
                         <span>Kein Abo, kein Kleingedrucktes</span>
+                    </div>
+                </div>
+                <div class="trust-item">
+                    <div class="trust-icon">&#128202;</div>
+                    <div>
+                        <strong><span id="proofCounter">3.212</span>+ Abrechnungen geprüft</strong>
+                        <span>Allein diesen Monat</span>
                     </div>
                 </div>
             </div>
@@ -308,7 +316,7 @@
                     <div class="file-list-consent">
                         <label class="consent-label">
                             <input type="checkbox" id="consentCheckbox">
-                            <span>Ich bin damit einverstanden, dass meine hochgeladene Abrechnung zur Prüfung verarbeitet und anschließend gelöscht wird und dass mein Prüfbericht per E-Mail zugesandt wird. Ich habe die <a href="/datenschutz.html" target="_blank">Datenschutzerklärung</a> und <a href="/agb.html" target="_blank">AGB</a> gelesen und akzeptiere diese.</span>
+                            <span>Ich bin damit einverstanden, dass meine hochgeladene Abrechnung zur Prüfung verarbeitet und anschließend gelöscht wird und dass mein Prüfbericht per E-Mail zugesandt wird. Ich stimme zu, dass die Dienstleistung sofort nach Bezahlung ausgeführt wird und mir bekannt ist, dass mein Widerrufsrecht mit vollständiger Erbringung der Leistung erlischt (§ 356 Abs. 4 BGB). Ich habe die <a href="/datenschutz.html" target="_blank">Datenschutzerklärung</a> und <a href="/agb.html" target="_blank">AGB</a> gelesen und akzeptiere diese.</span>
                         </label>
                     </div>
                     <div class="file-list-actions">
@@ -500,6 +508,7 @@
             <span class="footer-logo">NebenkostenRetter</span>
             <p>Automatisierte Prüfung Ihrer Nebenkostenabrechnung auf Basis der Betriebskostenverordnung. Keine Rechtsberatung.</p>
             <div class="footer-links">
+                <a href="/blog.html">Ratgeber</a>
                 <a href="/impressum.html">Impressum</a>
                 <a href="/datenschutz.html">Datenschutz</a>
                 <a href="/agb.html">AGB</a>

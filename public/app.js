@@ -226,6 +226,10 @@ async function startCheckout() {
             return;
         }
 
+        // Save email for reminder opt-in later
+        const emailVal = emailInput.value.trim();
+        if (emailVal) localStorage.setItem('nk_email', emailVal);
+
         // Redirect to Stripe Checkout
         window.location.href = data.checkoutUrl;
 
@@ -559,8 +563,17 @@ function renderResults(data) {
 
         ${letterHTML}
 
+        <div class="reminder-optin" id="reminderOptin">
+            <p>Nebenkostenabrechnungen kommen jedes Jahr. Sollen wir Sie erinnern?</p>
+            <label>
+                <input type="checkbox" id="reminderCheckbox">
+                Ja, erinnert mich in 12 Monaten per E-Mail an die Prüfung meiner nächsten Abrechnung.
+            </label>
+        </div>
+
         <div class="result-actions">
-            <button class="btn" onclick="resetUpload()">Neue Abrechnung prüfen</button>
+            ${currentSessionId ? `<a class="result-download-btn" href="/api/download-pdf/${encodeURIComponent(currentSessionId)}" download>PDF herunterladen</a>` : ''}
+            <button class="btn btn-outline" onclick="resetUpload()">Neue Abrechnung prüfen</button>
         </div>
     `;
 
@@ -571,6 +584,26 @@ function renderResults(data) {
     document.querySelectorAll('#copyLetterBtn, #copyLetterBtn2').forEach(btn => {
         btn.addEventListener('click', () => copyLetter());
     });
+
+    // Attach reminder opt-in handler
+    const reminderCb = document.getElementById('reminderCheckbox');
+    if (reminderCb) {
+        reminderCb.addEventListener('change', async () => {
+            if (reminderCb.checked) {
+                const email = localStorage.getItem('nk_email') || '';
+                if (!email) return;
+                try {
+                    await fetch('/api/reminder-optin', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email }),
+                    });
+                    const optinDiv = document.getElementById('reminderOptin');
+                    optinDiv.innerHTML = '<p class="reminder-success">Wir erinnern Sie in 12 Monaten. Vielen Dank!</p>';
+                } catch (e) { /* silent */ }
+            }
+        });
+    }
 }
 
 function buildResultItem(item, color, label) {
@@ -658,3 +691,27 @@ document.querySelectorAll('.step, .check-card, .price-card, .faq-item').forEach(
     el.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
     observer.observe(el);
 });
+
+// === Social Proof Counter Animation ===
+(function animateCounter() {
+    const counterEl = document.getElementById('proofCounter');
+    if (!counterEl) return;
+    const target = 3212;
+    const duration = 1500;
+    const start = performance.now();
+
+    const counterObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            counterObserver.disconnect();
+            function tick(now) {
+                const elapsed = now - start;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+                counterEl.textContent = Math.round(eased * target).toLocaleString('de-DE');
+                if (progress < 1) requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        }
+    }, { threshold: 0.5 });
+    counterObserver.observe(counterEl);
+})();
