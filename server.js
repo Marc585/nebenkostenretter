@@ -19,6 +19,46 @@ const PORT = process.env.PORT || 3000;
 app.use(compression());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));
 
+function requireAdminAuth(req, res, next) {
+    const adminUser = process.env.ADMIN_DASHBOARD_USER;
+    const adminPass = process.env.ADMIN_DASHBOARD_PASS;
+
+    if (!adminUser || !adminPass) {
+        return res.status(503).send('Admin dashboard is not configured.');
+    }
+
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="NebenkostenRetter Admin"');
+        return res.status(401).send('Authentication required.');
+    }
+
+    const encoded = auth.split(' ')[1] || '';
+    let decoded = '';
+    try {
+        decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    } catch (err) {
+        return res.status(401).send('Invalid authentication header.');
+    }
+
+    const sepIdx = decoded.indexOf(':');
+    if (sepIdx < 0) {
+        return res.status(401).send('Invalid credentials.');
+    }
+
+    const user = decoded.slice(0, sepIdx);
+    const pass = decoded.slice(sepIdx + 1);
+    if (user !== adminUser || pass !== adminPass) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="NebenkostenRetter Admin"');
+        return res.status(401).send('Invalid credentials.');
+    }
+
+    return next();
+}
+
+// Protect revenue/analytics dashboard endpoints from public access.
+app.use(['/admin-funnel.html', '/api/funnel-summary'], requireAdminAuth);
+
 // Google Analytics helper script (optional, only active if GA_MEASUREMENT_ID is set)
 app.get('/analytics.js', (req, res) => {
     const measurementId = process.env.GA_MEASUREMENT_ID || 'G-G22GLKY9EG';
