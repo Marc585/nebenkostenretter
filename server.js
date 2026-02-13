@@ -59,9 +59,159 @@ const anthropic = new Anthropic({
 });
 
 // === State Management ===
-const pendingFiles = new Map();      // session_id → { files, createdAt }
+const pendingFiles = new Map();      // session_id → { files, email, plan, source, campaign, createdAt }
 const activeAnalyses = new Set();    // session_ids currently being analyzed
 const completedResults = new Map();  // session_id → { result, createdAt }
+
+const PLAN_CONFIG = {
+    basic: {
+        amountCents: 499,
+        label: 'Basic',
+        description: 'Komplette Prüfung aller Posten inkl. Widerspruchsbrief',
+    },
+};
+
+const DATA_DIR = path.join(__dirname, 'data');
+const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+
+function ensureDataDir() {
+    if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+}
+
+function readJsonArray(filePath) {
+    ensureDataDir();
+    if (!fs.existsSync(filePath)) return [];
+    try {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+        console.error(`Failed to read ${filePath}:`, err.message);
+        return [];
+    }
+}
+
+function writeJsonArray(filePath, data) {
+    ensureDataDir();
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+function sanitizeText(value, maxLen = 200) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    return trimmed.slice(0, maxLen);
+}
+
+function getPlanConfig(planName) {
+    return PLAN_CONFIG[planName] || PLAN_CONFIG.basic;
+}
+
+function hasEvent(sessionId, eventName) {
+    const events = readJsonArray(EVENTS_FILE);
+    return events.some(e => e.session_id === sessionId && e.event_name === eventName);
+}
+
+function appendEvent({
+    sessionId = null,
+    eventName,
+    source = null,
+    campaign = null,
+    meta = {},
+    ts = null,
+}) {
+    if (!eventName) return;
+    let createdAt = new Date().toISOString();
+    if (ts) {
+        const parsed = new Date(ts);
+        if (!Number.isNaN(parsed.getTime())) {
+            createdAt = parsed.toISOString();
+        }
+    }
+    const events = readJsonArray(EVENTS_FILE);
+    events.push({
+        id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        session_id: sessionId,
+        event_name: eventName,
+        source: sanitizeText(source, 120),
+        campaign: sanitizeText(campaign, 120),
+        meta: meta && typeof meta === 'object' ? meta : {},
+        created_at: createdAt,
+    });
+    writeJsonArray(EVENTS_FILE, events);
+}
+
+function upsertOrder(orderPatch) {
+    if (!orderPatch || !orderPatch.session_id) return;
+    const orders = readJsonArray(ORDERS_FILE);
+    const idx = orders.findIndex(o => o.session_id === orderPatch.session_id);
+    const nowIso = new Date().toISOString();
+    const merged = {
+        ...(idx >= 0 ? orders[idx] : { created_at: nowIso }),
+        ...orderPatch,
+        updated_at: nowIso,
+    };
+    if (idx >= 0) {
+        orders[idx] = merged;
+    } else {
+        orders.push(merged);
+    }
+    writeJsonArray(ORDERS_FILE, orders);
+}
+
+function summarizeFunnel(fromDate, toDate) {
+    const parsedFrom = fromDate ? new Date(fromDate).getTime() : 0;
+    const parsedTo = toDate ? new Date(toDate).getTime() : Date.now();
+    const fromTs = Number.isNaN(parsedFrom) ? 0 : parsedFrom;
+    const toTs = Number.isNaN(parsedTo) ? Date.now() : parsedTo;
+
+    const events = readJsonArray(EVENTS_FILE).filter(e => {
+        const t = new Date(e.created_at).getTime();
+        return t >= fromTs && t <= toTs;
+    });
+
+    const orders = readJsonArray(ORDERS_FILE).filter(o => {
+        const t = new Date(o.created_at || o.updated_at).getTime();
+        return t >= fromTs && t <= toTs;
+    });
+
+    const eventCounts = events.reduce((acc, e) => {
+        acc[e.event_name] = (acc[e.event_name] || 0) + 1;
+        return acc;
+    }, {});
+
+    const paidOrders = orders.filter(o => o.payment_status === 'paid');
+    const refundedOrders = orders.filter(o => o.refund_status === 'refunded');
+    const grossRevenue = paidOrders.reduce((sum, o) => sum + (Number(o.gross_eur) || 0), 0);
+    const refundedRevenue = refundedOrders.reduce((sum, o) => sum + (Number(o.gross_eur) || 0), 0);
+
+    const planBreakdown = paidOrders.reduce((acc, order) => {
+        const key = order.plan || 'basic';
+        if (!acc[key]) acc[key] = { orders: 0, gross_eur: 0 };
+        acc[key].orders += 1;
+        acc[key].gross_eur += Number(order.gross_eur) || 0;
+        return acc;
+    }, {});
+
+    return {
+        range: {
+            from: fromDate || null,
+            to: toDate || null,
+        },
+        events_total: events.length,
+        event_counts: eventCounts,
+        orders_total: orders.length,
+        paid_orders: paidOrders.length,
+        refunded_orders: refundedOrders.length,
+        gross_revenue_eur: Number(grossRevenue.toFixed(2)),
+        refunded_revenue_eur: Number(refundedRevenue.toFixed(2)),
+        net_revenue_eur: Number((grossRevenue - refundedRevenue).toFixed(2)),
+        plan_breakdown: planBreakdown,
+    };
+}
 
 // Clean up old entries every 5 minutes
 setInterval(() => {
@@ -663,6 +813,18 @@ async function autoRefund(sessionId, reason) {
                 reason: 'requested_by_customer',
             });
             console.log(`  Auto-refund issued for ${sessionId}: ${reason}`);
+            upsertOrder({
+                session_id: sessionId,
+                payment_status: 'paid',
+                refund_status: 'refunded',
+            });
+            if (!hasEvent(sessionId, 'refund_issued')) {
+                appendEvent({
+                    sessionId,
+                    eventName: 'refund_issued',
+                    meta: { reason },
+                });
+            }
             return true;
         }
     } catch (err) {
@@ -698,7 +860,8 @@ function startBackgroundAnalysis(sessionId) {
                 // Auto-refund — customer shouldn't pay for an unusable document
                 const refunded = await autoRefund(sessionId, result.validierung);
                 if (refunded) {
-                    errorMsg += ' Ihr Geld (3,99 €) wurde automatisch zurückerstattet.';
+                    const refundedAmount = (getPlanConfig(pending.plan || 'basic').amountCents / 100).toFixed(2).replace('.', ',');
+                    errorMsg += ` Ihr Geld (${refundedAmount} €) wurde automatisch zurückerstattet.`;
                 }
 
                 console.log(`Validation failed for ${sessionId}: ${result.validierung} — ${result.validierung_grund || 'no reason'}`);
@@ -713,6 +876,18 @@ function startBackgroundAnalysis(sessionId) {
 
             completedResults.set(sessionId, { result, createdAt: Date.now() });
             console.log(`Analysis complete for ${sessionId}: ${result.fehler_anzahl} errors, ${result.warnungen_anzahl} warnings`);
+            appendEvent({
+                sessionId,
+                eventName: 'analysis_completed',
+                source: pending.source,
+                campaign: pending.campaign,
+                meta: {
+                    plan: pending.plan || 'basic',
+                    fehler: result.fehler_anzahl || 0,
+                    warnungen: result.warnungen_anzahl || 0,
+                    ersparnis: result.potenzielle_ersparnis_gesamt || 0,
+                },
+            });
 
             // Send email with PDF if email was provided
             if (pending.email) {
@@ -744,8 +919,7 @@ function startBackgroundAnalysis(sessionId) {
         });
 }
 
-// === STEP 1: Upload files + create Stripe Checkout Session ===
-app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
+async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
     try {
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
@@ -757,6 +931,13 @@ app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
 
         // Determine base URL for redirects
         const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const selectedPlanRaw = sanitizeText(req.body.plan, 20) || fallbackPlan;
+        const selectedPlan = Object.prototype.hasOwnProperty.call(PLAN_CONFIG, selectedPlanRaw)
+            ? selectedPlanRaw
+            : 'basic';
+        const planConfig = getPlanConfig(selectedPlan);
+        const source = sanitizeText(req.body.source || req.query.source, 120);
+        const campaign = sanitizeText(req.body.campaign || req.query.campaign, 120);
 
         const customerEmail = req.body.email || undefined;
 
@@ -767,16 +948,21 @@ app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
                 price_data: {
                     currency: 'eur',
                     product_data: {
-                        name: 'Nebenkostenabrechnung Prüfung',
-                        description: 'Komplette Prüfung aller Posten inkl. Widerspruchsbrief',
+                        name: `Nebenkostenabrechnung Prüfung (${planConfig.label})`,
+                        description: planConfig.description,
                     },
-                    unit_amount: 399,
+                    unit_amount: planConfig.amountCents,
                 },
                 quantity: 1,
             }],
             mode: 'payment',
             success_url: `${baseUrl}/?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${baseUrl}/#upload`,
+            metadata: {
+                plan: selectedPlan,
+                source: source || '',
+                campaign: campaign || '',
+            },
         });
 
         // Store files + email temporarily
@@ -788,16 +974,51 @@ app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
                 size: f.size,
             })),
             email: customerEmail,
+            plan: selectedPlan,
+            source,
+            campaign,
             createdAt: Date.now(),
         });
 
-        console.log(`Checkout session created: ${session.id} (${req.files.length} file(s), email: ${customerEmail || 'none'})`);
+        upsertOrder({
+            session_id: session.id,
+            plan: selectedPlan,
+            gross_eur: Number((planConfig.amountCents / 100).toFixed(2)),
+            net_eur: Number((planConfig.amountCents / 100).toFixed(2)),
+            payment_status: 'pending',
+            refund_status: 'none',
+            source,
+            campaign,
+        });
+
+        appendEvent({
+            sessionId: session.id,
+            eventName: 'checkout_started',
+            source,
+            campaign,
+            meta: {
+                plan: selectedPlan,
+                file_count: req.files.length,
+            },
+        });
+
+        console.log(`Checkout session created: ${session.id} (${selectedPlan}, ${req.files.length} file(s), email: ${customerEmail || 'none'})`);
         res.json({ checkoutUrl: session.url });
 
     } catch (err) {
         console.error('Checkout creation error:', err);
         res.status(500).json({ error: 'Zahlung konnte nicht erstellt werden. Bitte versuchen Sie es erneut.' });
     }
+}
+
+// === STEP 1: Upload files + create Stripe Checkout Session ===
+app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
+    return createCheckoutHandler(req, res, 'basic');
+});
+
+// === New V2 checkout with explicit plan ===
+app.post('/api/create-checkout-v2', upload.array('files', 5), async (req, res) => {
+    return createCheckoutHandler(req, res, 'basic');
 });
 
 // === STEP 2: Poll for analysis result ===
@@ -829,6 +1050,27 @@ app.get('/api/result/:sessionId', async (req, res) => {
         const session = await stripe.checkout.sessions.retrieve(sessionId);
         if (session.payment_status !== 'paid') {
             return res.json({ status: 'error', error: 'Zahlung nicht abgeschlossen.' });
+        }
+
+        upsertOrder({
+            session_id: sessionId,
+            plan: session.metadata?.plan || 'basic',
+            payment_status: 'paid',
+            refund_status: 'none',
+            source: session.metadata?.source || null,
+            campaign: session.metadata?.campaign || null,
+        });
+        if (!hasEvent(sessionId, 'payment_completed')) {
+            appendEvent({
+                sessionId,
+                eventName: 'payment_completed',
+                source: session.metadata?.source || null,
+                campaign: session.metadata?.campaign || null,
+                meta: {
+                    plan: session.metadata?.plan || 'basic',
+                    amount_total: session.amount_total || null,
+                },
+            });
         }
 
         // Check if files exist
@@ -880,6 +1122,9 @@ app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
                 size: f.size,
             })),
             email: session.customer_email || undefined,
+            plan: session.metadata?.plan || 'basic',
+            source: session.metadata?.source || null,
+            campaign: session.metadata?.campaign || null,
             createdAt: Date.now(),
         });
 
@@ -887,11 +1132,55 @@ app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
 
         // Start analysis
         startBackgroundAnalysis(sessionId);
+        appendEvent({
+            sessionId,
+            eventName: 'analysis_retry_started',
+            source: session.metadata?.source || null,
+            campaign: session.metadata?.campaign || null,
+            meta: { file_count: req.files.length },
+        });
         res.json({ status: 'processing' });
 
     } catch (err) {
         console.error('Retry analysis error:', err);
         res.status(500).json({ error: 'Erneuter Versuch fehlgeschlagen. Bitte kontaktieren Sie marc@marcboehle.de' });
+    }
+});
+
+// === Funnel event tracking ===
+app.post('/api/track-event', express.json(), (req, res) => {
+    try {
+        const eventName = sanitizeText(req.body.event_name, 80);
+        if (!eventName) {
+            return res.status(400).json({ error: 'event_name fehlt.' });
+        }
+
+        appendEvent({
+            sessionId: sanitizeText(req.body.session_id, 120),
+            eventName,
+            source: sanitizeText(req.body.source, 120),
+            campaign: sanitizeText(req.body.campaign, 120),
+            meta: req.body.meta && typeof req.body.meta === 'object' ? req.body.meta : {},
+            ts: req.body.ts,
+        });
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('track-event error:', err.message);
+        res.status(500).json({ error: 'Tracking fehlgeschlagen.' });
+    }
+});
+
+// === Daily funnel summary ===
+app.get('/api/funnel-summary', (req, res) => {
+    try {
+        const from = sanitizeText(req.query.from, 30);
+        const to = sanitizeText(req.query.to, 30);
+        const summary = summarizeFunnel(from, to);
+        res.json(summary);
+    } catch (err) {
+        console.error('funnel-summary error:', err.message);
+        res.status(500).json({ error: 'Funnel-Summary fehlgeschlagen.' });
     }
 });
 
@@ -916,6 +1205,28 @@ app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
     if (event.type === 'checkout.session.completed') {
         const session = event.data.object;
         console.log(`Webhook: checkout.session.completed for ${session.id}`);
+        upsertOrder({
+            session_id: session.id,
+            plan: session.metadata?.plan || 'basic',
+            payment_status: 'paid',
+            refund_status: 'none',
+            source: session.metadata?.source || null,
+            campaign: session.metadata?.campaign || null,
+            gross_eur: session.amount_total ? Number((session.amount_total / 100).toFixed(2)) : undefined,
+            net_eur: session.amount_total ? Number((session.amount_total / 100).toFixed(2)) : undefined,
+        });
+        if (!hasEvent(session.id, 'payment_completed')) {
+            appendEvent({
+                sessionId: session.id,
+                eventName: 'payment_completed',
+                source: session.metadata?.source || null,
+                campaign: session.metadata?.campaign || null,
+                meta: {
+                    plan: session.metadata?.plan || 'basic',
+                    amount_total: session.amount_total || null,
+                },
+            });
+        }
         // Start analysis if files are pending and not already running
         if (pendingFiles.has(session.id) && !activeAnalyses.has(session.id) && !completedResults.has(session.id)) {
             startBackgroundAnalysis(session.id);
@@ -936,6 +1247,10 @@ app.get('/api/download-pdf/:sessionId', async (req, res) => {
         }
 
         const pdfBuffer = await generatePDF(cached.result);
+        appendEvent({
+            sessionId,
+            eventName: 'result_pdf_downloaded',
+        });
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'attachment; filename="Pruefbericht-Nebenkosten.pdf"');
         res.send(pdfBuffer);
@@ -965,6 +1280,10 @@ app.post('/api/reminder-optin', express.json(), (req, res) => {
             reminders.push({ email, createdAt: new Date().toISOString() });
             fs.writeFileSync(remindersFile, JSON.stringify(reminders, null, 2));
             console.log(`Reminder opt-in: ${email}`);
+            appendEvent({
+                eventName: 'reminder_optin',
+                meta: { email_hash_hint: `${email.slice(0, 2)}***` },
+            });
         }
 
         res.json({ ok: true });

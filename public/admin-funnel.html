@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Funnel Dashboard | NebenkostenRetter</title>
+    <meta name="robots" content="noindex, nofollow">
+    <style>
+        :root {
+            --bg: #f7f7f4;
+            --card: #ffffff;
+            --text: #192028;
+            --muted: #5b6773;
+            --primary: #1a6b4a;
+            --border: #dde3e9;
+            --danger: #c53030;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .muted { color: var(--muted); }
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto auto;
+            gap: 10px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 16px;
+        }
+        .controls label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--muted);
+            display: block;
+            margin-bottom: 4px;
+        }
+        .controls input, .controls button {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            font: inherit;
+        }
+        .btn {
+            background: var(--primary);
+            color: #fff;
+            border: 1px solid var(--primary);
+            cursor: pointer;
+            font-weight: 600;
+            align-self: end;
+            height: 40px;
+            padding: 0 16px;
+        }
+        .btn.secondary {
+            background: #fff;
+            color: var(--text);
+            border-color: var(--border);
+        }
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+        }
+        .kpi-label {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+        .kpi-value {
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            padding: 8px 2px;
+        }
+        th { color: var(--muted); font-weight: 600; }
+        .error {
+            color: var(--danger);
+            margin-top: 8px;
+        }
+        .topline {
+            margin: 0 0 10px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        @media (max-width: 900px) {
+            .controls { grid-template-columns: 1fr; }
+            .kpis { grid-template-columns: 1fr 1fr; }
+            .grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Funnel Dashboard</h1>
+            <div class="muted">NebenkostenRetter</div>
+        </div>
+
+        <div class="controls">
+            <div>
+                <label for="fromDate">Von</label>
+                <input id="fromDate" type="date">
+            </div>
+            <div>
+                <label for="toDate">Bis</label>
+                <input id="toDate" type="date">
+            </div>
+            <button class="btn" id="loadBtn">Laden</button>
+            <button class="btn secondary" id="last7Btn">Letzte 7 Tage</button>
+        </div>
+
+        <div class="kpis">
+            <div class="card">
+                <div class="kpi-label">Netto-Umsatz (EUR)</div>
+                <div class="kpi-value" id="netRevenue">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Paid Orders</div>
+                <div class="kpi-value" id="paidOrders">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Refunded Orders</div>
+                <div class="kpi-value" id="refundedOrders">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Events gesamt</div>
+                <div class="kpi-value" id="eventsTotal">-</div>
+            </div>
+        </div>
+
+        <p class="topline" id="rangeLine">Bereich: -</p>
+
+        <div class="grid">
+            <div class="card">
+                <h3>Event Counts</h3>
+                <table>
+                    <thead>
+                        <tr><th>Event</th><th>Anzahl</th></tr>
+                    </thead>
+                    <tbody id="eventsTableBody"></tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3>Plan Breakdown</h3>
+                <table>
+                    <thead>
+                        <tr><th>Plan</th><th>Orders</th><th>Gross EUR</th></tr>
+                    </thead>
+                    <tbody id="plansTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <p class="error" id="errorBox" style="display:none;"></p>
+    </div>
+
+    <script>
+        const fromDateEl = document.getElementById('fromDate');
+        const toDateEl = document.getElementById('toDate');
+        const loadBtn = document.getElementById('loadBtn');
+        const last7Btn = document.getElementById('last7Btn');
+        const errorBox = document.getElementById('errorBox');
+
+        function fmtCurrency(value) {
+            const number = Number(value || 0);
+            return number.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function setLast7Days() {
+            const today = new Date();
+            const from = new Date();
+            from.setDate(today.getDate() - 6);
+            toDateEl.value = today.toISOString().slice(0, 10);
+            fromDateEl.value = from.toISOString().slice(0, 10);
+        }
+
+        function renderSummary(summary) {
+            document.getElementById('netRevenue').textContent = fmtCurrency(summary.net_revenue_eur || 0);
+            document.getElementById('paidOrders').textContent = String(summary.paid_orders || 0);
+            document.getElementById('refundedOrders').textContent = String(summary.refunded_orders || 0);
+            document.getElementById('eventsTotal').textContent = String(summary.events_total || 0);
+            document.getElementById('rangeLine').textContent = `Bereich: ${summary.range?.from || '-'} bis ${summary.range?.to || '-'}`;
+
+            const eventsTableBody = document.getElementById('eventsTableBody');
+            const eventRows = Object.entries(summary.event_counts || {});
+            eventsTableBody.innerHTML = eventRows.length
+                ? eventRows.map(([name, count]) => `<tr><td>${name}</td><td>${count}</td></tr>`).join('')
+                : '<tr><td colspan="2" class="muted">Keine Daten</td></tr>';
+
+            const plansTableBody = document.getElementById('plansTableBody');
+            const planRows = Object.entries(summary.plan_breakdown || {});
+            plansTableBody.innerHTML = planRows.length
+                ? planRows.map(([plan, row]) => `<tr><td>${plan}</td><td>${row.orders || 0}</td><td>${fmtCurrency(row.gross_eur || 0)}</td></tr>`).join('')
+                : '<tr><td colspan="3" class="muted">Keine Daten</td></tr>';
+        }
+
+        async function loadSummary() {
+            errorBox.style.display = 'none';
+            const from = fromDateEl.value;
+            const to = toDateEl.value;
+            const params = new URLSearchParams();
+            if (from) params.set('from', from);
+            if (to) params.set('to', to);
+
+            try {
+                const res = await fetch(`/api/funnel-summary?${params.toString()}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Laden fehlgeschlagen');
+                renderSummary(data);
+            } catch (err) {
+                errorBox.textContent = err.message || 'Unbekannter Fehler';
+                errorBox.style.display = 'block';
+            }
+        }
+
+        loadBtn.addEventListener('click', loadSummary);
+        last7Btn.addEventListener('click', () => {
+            setLast7Days();
+            loadSummary();
+        });
+
+        setLast7Days();
+        loadSummary();
+    </script>
+</body>
+</html>

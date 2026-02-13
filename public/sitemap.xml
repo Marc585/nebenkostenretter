@@ -2,9 +2,27 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
         <loc>https://nebenkostenretter.de/</loc>
-        <lastmod>2026-02-10</lastmod>
+        <lastmod>2026-02-13</lastmod>
         <changefreq>weekly</changefreq>
         <priority>1.0</priority>
+    </url>
+    <url>
+        <loc>https://nebenkostenretter.de/nebenkostenabrechnung-pruefen.html</loc>
+        <lastmod>2026-02-13</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <url>
+        <loc>https://nebenkostenretter.de/widerspruch-nebenkostenabrechnung-muster.html</loc>
+        <lastmod>2026-02-13</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <url>
+        <loc>https://nebenkostenretter.de/betriebskosten-nicht-umlagefaehig.html</loc>
+        <lastmod>2026-02-13</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
     </url>
     <url>
         <loc>https://nebenkostenretter.de/impressum.html</loc>

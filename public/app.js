@@ -18,6 +18,47 @@ let analysisError = null;
 let analysisErrorType = null;
 let currentSessionId = null;
 let apiDone = false;
+let selectedPlan = 'basic';
+let uploadTracked = false;
+
+const PLAN_LABELS = {
+    basic: 'Für 4,99 € prüfen lassen',
+};
+
+function getAttribution() {
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+
+    const source = params.get('utm_source') || params.get('source') || localStorage.getItem('nk_source') || 'direct';
+    const campaign = params.get('utm_campaign') || params.get('campaign') || localStorage.getItem('nk_campaign') || 'none';
+
+    localStorage.setItem('nk_source', source);
+    localStorage.setItem('nk_campaign', campaign);
+
+    return { source, campaign };
+}
+
+function trackEvent(eventName, extra = {}) {
+    const attribution = getAttribution();
+    const payload = {
+        event_name: eventName,
+        session_id: currentSessionId || localStorage.getItem('nk_session_id') || null,
+        source: attribution.source,
+        campaign: attribution.campaign,
+        ts: new Date().toISOString(),
+        meta: {
+            plan: selectedPlan,
+            ...extra,
+        },
+    };
+
+    fetch('/api/track-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+    }).catch(() => {});
+}
 
 (function checkSession() {
     const params = new URLSearchParams(window.location.search);
@@ -54,6 +95,8 @@ let apiDone = false;
     }
 })();
 
+trackEvent('page_view');
+
 // === Poll server for analysis result ===
 function pollForResults(sessionId) {
     analysisResult = null;
@@ -70,11 +113,13 @@ function pollForResults(sessionId) {
                 analysisResult = data.data;
                 apiDone = true;
                 localStorage.removeItem('nk_session_id');
+                trackEvent('analysis_result_ready');
             } else if (data.status === 'error') {
                 analysisError = data.error;
                 analysisErrorType = data.errorType || 'unknown';
                 apiDone = true;
                 // Keep session_id in localStorage for retry
+                trackEvent('analysis_error', { error_type: analysisErrorType });
             } else if (data.status === 'processing') {
                 // Keep polling every 2 seconds
                 setTimeout(poll, 2000);
@@ -170,6 +215,12 @@ function addFiles(files) {
 
     if (collectedFiles.length > 0) {
         renderFileList();
+        if (!uploadTracked) {
+            uploadTracked = true;
+            trackEvent('upload_added', { file_count: collectedFiles.length });
+        } else {
+            trackEvent('upload_updated', { file_count: collectedFiles.length });
+        }
     }
 }
 
@@ -200,6 +251,7 @@ function removeFile(index) {
 // === Upload files to server + redirect to Stripe Checkout ===
 async function startCheckout() {
     if (collectedFiles.length === 0) return;
+    const attribution = getAttribution();
 
     // Disable button and show loading state
     startAnalysisBtn.disabled = true;
@@ -210,9 +262,13 @@ async function startCheckout() {
         formData.append('files', file);
     }
     formData.append('email', emailInput.value.trim());
+    formData.append('plan', selectedPlan);
+    formData.append('source', attribution.source);
+    formData.append('campaign', attribution.campaign);
+    trackEvent('checkout_clicked', { file_count: collectedFiles.length });
 
     try {
-        const res = await fetch('/api/create-checkout', {
+        const res = await fetch('/api/create-checkout-v2', {
             method: 'POST',
             body: formData,
         });
@@ -222,7 +278,7 @@ async function startCheckout() {
         if (!res.ok) {
             alert(data.error || 'Fehler beim Erstellen der Zahlung.');
             startAnalysisBtn.disabled = false;
-            startAnalysisBtn.textContent = 'Für 3,99 € prüfen lassen';
+            startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
             return;
         }
 
@@ -231,12 +287,13 @@ async function startCheckout() {
         if (emailVal) localStorage.setItem('nk_email', emailVal);
 
         // Redirect to Stripe Checkout
+        trackEvent('checkout_redirected');
         window.location.href = data.checkoutUrl;
 
     } catch (err) {
         alert('Verbindung zum Server fehlgeschlagen. Läuft der Server?');
         startAnalysisBtn.disabled = false;
-        startAnalysisBtn.textContent = 'Für 3,99 € prüfen lassen';
+        startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
     }
 }
 
@@ -370,6 +427,7 @@ function showError(message) {
     resultPreview.innerHTML = contentHTML;
     resultPreview.style.display = 'block';
     resultPreview.style.animation = 'fadeInUp 0.5s ease';
+    trackEvent('result_rendered_error', { error_type: analysisErrorType || 'unknown' });
 
     // Attach retry handlers if applicable
     if (canRetry) {
@@ -579,11 +637,21 @@ function renderResults(data) {
 
     resultPreview.style.display = 'block';
     resultPreview.style.animation = 'fadeInUp 0.5s ease';
+    trackEvent('result_rendered_success', {
+        fehler_anzahl: data.fehler_anzahl || 0,
+        warnungen_anzahl: data.warnungen_anzahl || 0,
+        ersparnis: data.potenzielle_ersparnis_gesamt || 0,
+    });
 
     // Attach copy handlers
     document.querySelectorAll('#copyLetterBtn, #copyLetterBtn2').forEach(btn => {
         btn.addEventListener('click', () => copyLetter());
     });
+
+    const pdfLink = document.querySelector('.result-download-btn');
+    if (pdfLink) {
+        pdfLink.addEventListener('click', () => trackEvent('result_pdf_click'));
+    }
 
     // Attach reminder opt-in handler
     const reminderCb = document.getElementById('reminderCheckbox');
@@ -640,11 +708,13 @@ function copyLetter() {
 
 function resetUpload() {
     collectedFiles = [];
+    uploadTracked = false;
     uploadArea.style.display = 'block';
     fileList.style.display = 'none';
     uploadProgress.style.display = 'none';
     resultPreview.style.display = 'none';
     fileInput.value = '';
+    startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
 }
 
 // === Smooth Scroll for anchor links ===
