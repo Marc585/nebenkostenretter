@@ -599,6 +599,35 @@ a { color: var(--primary); text-decoration: none; }
     font-size: 14px;
 }
 
+.guide-links {
+    padding: 56px 0;
+    background: var(--bg-white);
+}
+.guide-links-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+.guide-link-card {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    background: var(--bg-warm);
+}
+.guide-link-card strong {
+    display: block;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.guide-link-card span {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+.guide-link-card:hover {
+    border-color: var(--primary);
+}
+
 /* === Responsive === */
 @media (max-width: 900px) {
     .hero-inner { grid-template-columns: 1fr; gap: 40px; text-align: center; }
@@ -611,6 +640,7 @@ a { color: var(--primary); text-decoration: none; }
     .pricing-box { grid-template-columns: 1fr; gap: 32px; padding: 32px; }
     .pricing-left h2 { text-align: center; }
     .intent-links-grid { grid-template-columns: 1fr; }
+    .guide-links-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 680px) {
