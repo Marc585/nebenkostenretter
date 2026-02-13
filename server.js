@@ -18,6 +18,34 @@ const PORT = process.env.PORT || 3000;
 // Security & performance middleware
 app.use(compression());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));
+
+// Google Analytics helper script (optional, only active if GA_MEASUREMENT_ID is set)
+app.get('/analytics.js', (req, res) => {
+    const measurementId = process.env.GA_MEASUREMENT_ID || '';
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+
+    if (!measurementId) {
+        return res.send('// GA disabled: set GA_MEASUREMENT_ID to enable tracking.\n');
+    }
+
+    return res.send(`
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+
+const script = document.createElement('script');
+script.async = true;
+script.src = 'https://www.googletagmanager.com/gtag/js?id=${measurementId}';
+document.head.appendChild(script);
+
+gtag('js', new Date());
+gtag('config', '${measurementId}', {
+  anonymize_ip: true,
+  page_path: window.location.pathname + window.location.search
+});
+`);
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Rate limiting
