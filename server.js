@@ -21,7 +21,7 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));
 
 // Google Analytics helper script (optional, only active if GA_MEASUREMENT_ID is set)
 app.get('/analytics.js', (req, res) => {
-    const measurementId = process.env.GA_MEASUREMENT_ID || '';
+    const measurementId = process.env.GA_MEASUREMENT_ID || 'G-G22GLKY9EG';
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300');
 
