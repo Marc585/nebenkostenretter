@@ -216,7 +216,12 @@ function updateButtonState() {
     if (startFreePreviewBtn) {
         startFreePreviewBtn.disabled = freePreviewRunning || !(hasFiles && consentCheckbox.checked);
     }
-    if (consentCheckbox.checked) clearConsentError();
+    // UX: if user has uploaded files but hasn't consented yet, show a clear hint.
+    if (hasFiles && !consentCheckbox.checked) {
+        showConsentError('Bitte setzen Sie den Haken zur Datenverarbeitung, damit der Vorab-Check starten kann.');
+    } else if (consentCheckbox.checked) {
+        clearConsentError();
+    }
 }
 
 consentCheckbox.addEventListener('change', updateButtonState);
