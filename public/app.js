@@ -587,6 +587,8 @@ function animateProgress() {
     const step3 = document.getElementById('step3');
     const step4 = document.getElementById('step4');
     const allSteps = [step1, step2, step3, step4];
+    const startedAt = Date.now();
+    let fallbackShown = false;
 
     const statusTexts = [
         'Dokument wird eingelesen...',
@@ -645,6 +647,48 @@ function animateProgress() {
                     renderResults(analysisResult);
                 }
             }, 600);
+            return;
+        }
+
+        // UX fallback: if the backend already finished (email received) but the UI is stuck,
+        // give the user a clear action to re-fetch the result.
+        if (!fallbackShown && Date.now() - startedAt > 150000) { // 2.5 minutes
+            fallbackShown = true;
+            spinnerStatus.textContent = 'Das dauert länger als üblich...';
+            const existing = document.getElementById('resultFallback');
+            if (!existing) {
+                const box = document.createElement('div');
+                box.id = 'resultFallback';
+                box.style.marginTop = '14px';
+                box.style.padding = '12px 14px';
+                box.style.background = '#fff';
+                box.style.border = '1px solid #e5e7eb';
+                box.style.borderRadius = '12px';
+                box.style.textAlign = 'left';
+                box.innerHTML = `
+                    <div style="font-weight: 700; margin-bottom: 6px;">Hinweis</div>
+                    <div style="color:#6b7280; font-size: 14px; line-height: 1.4; margin-bottom: 10px;">
+                        Wenn Sie den Prüfbericht bereits per E-Mail erhalten haben, ist das Ergebnis fertig.
+                        Klicken Sie dann auf „Ergebnis jetzt laden“ oder laden Sie die Seite neu.
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <button class="btn" id="forceResultFetchBtn" type="button">Ergebnis jetzt laden</button>
+                        <button class="btn btn-outline" id="reloadBtn" type="button">Seite neu laden</button>
+                    </div>
+                `;
+                uploadProgress.appendChild(box);
+                const forceBtn = document.getElementById('forceResultFetchBtn');
+                const reloadBtn = document.getElementById('reloadBtn');
+                if (forceBtn) {
+                    forceBtn.addEventListener('click', () => {
+                        if (!currentSessionId) return;
+                        pollForResults(currentSessionId);
+                    });
+                }
+                if (reloadBtn) {
+                    reloadBtn.addEventListener('click', () => window.location.reload());
+                }
+            }
         }
     }, 300);
 }
