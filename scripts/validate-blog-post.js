@@ -61,6 +61,21 @@ function extractLinks(html) {
   return links;
 }
 
+function findTransliterationWords(text, transliterationWords) {
+  const words = text.match(/\b[^\s\d]{2,}\b/g) || [];
+  const offenders = new Set();
+  const blocked = new Set((transliterationWords || []).map((w) => w.toLowerCase()));
+
+  for (const rawWord of words) {
+    const cleaned = rawWord.toLowerCase().replace(/[^a-zäöüß]/g, "");
+    if (blocked.has(cleaned)) {
+      offenders.add(rawWord);
+    }
+  }
+
+  return Array.from(offenders);
+}
+
 function extractArticleMeta(html) {
   const title = getFirstMatch(html, /<title>([^<]+)<\/title>/i);
   const h1 = getFirstMatch(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i);
@@ -140,6 +155,17 @@ function main() {
 
   if (words < rules.minWordCount) {
     errors.push(`Word count too low. Found ${words}, required ${rules.minWordCount}.`);
+  }
+
+  if (rules.enforceGermanUmlauts) {
+    const transliterationWords = rules.forbiddenTransliterationWords || [];
+    const offenders = findTransliterationWords(visibleText, transliterationWords);
+    if (offenders.length > 0) {
+      const sample = offenders.slice(0, 12).join(", ");
+      errors.push(
+        `German umlaut rule violated. Use ä/ö/ü instead of ae/oe/ue. Examples: ${sample}`
+      );
+    }
   }
 
   const blogDir = path.join(ROOT, rules.blogDir);

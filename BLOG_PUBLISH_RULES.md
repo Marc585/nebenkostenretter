@@ -30,7 +30,11 @@ This file defines the mandatory checks before a new SEO article is published.
 6. Minimum content depth
 - Minimum word count: 250 words of visible text.
 
-7. Publish integration
+7. German language quality
+- German articles must use real umlauts (`ä`, `ö`, `ü`, `Ä`, `Ö`, `Ü`) instead of transliterations (`ae`, `oe`, `ue`).
+- This is enforced by validator checks against blocked transliteration words from `blog-publish-rules.json`.
+
+8. Publish integration
 - New URL must be added in:
   - `public/blog.html`
   - `public/sitemap.xml`
