@@ -1,0 +1,13 @@
+{
+  "blogDir": "public/blog",
+  "blogIndexFile": "public/blog.html",
+  "sitemapFile": "public/sitemap.xml",
+  "moneyPagePath": "/nebenkostenabrechnung-pruefen.html",
+  "minWordCount": 250,
+  "minInternalBlogLinks": 2,
+  "maxTitleSimilarity": 0.72,
+  "requiredSchemaTypes": [
+    "Article",
+    "BreadcrumbList"
+  ]
+}
