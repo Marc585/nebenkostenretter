@@ -7,6 +7,7 @@ const addMoreBtn = document.getElementById('addMoreBtn');
 const startFreePreviewBtn = document.getElementById('startFreePreviewBtn');
 const startAnalysisBtn = document.getElementById('startAnalysisBtn');
 const emailInput = document.getElementById('emailInput');
+const livingAreaInput = document.getElementById('livingAreaInput');
 const uploadProgress = document.getElementById('uploadProgress');
 const resultPreview = document.getElementById('resultPreview');
 
@@ -39,6 +40,16 @@ function getAttribution() {
     localStorage.setItem('nk_campaign', campaign);
 
     return { source, campaign };
+}
+
+function normalizeLivingAreaInput(value) {
+    const raw = (value || '').trim();
+    if (!raw) return null;
+    const cleaned = raw.replace(',', '.').replace(/[^0-9.]/g, '');
+    const parsed = Number(cleaned);
+    if (!Number.isFinite(parsed)) return null;
+    if (parsed < 10 || parsed > 500) return null;
+    return Math.round(parsed * 10) / 10;
 }
 
 function trackEvent(eventName, extra = {}) {
@@ -179,6 +190,16 @@ function updateButtonState() {
 
 consentCheckbox.addEventListener('change', updateButtonState);
 emailInput.addEventListener('input', updateButtonState);
+if (livingAreaInput) {
+    livingAreaInput.addEventListener('blur', () => {
+        const normalized = normalizeLivingAreaInput(livingAreaInput.value);
+        if (livingAreaInput.value.trim() && normalized === null) {
+            livingAreaInput.classList.add('input-warning');
+        } else {
+            livingAreaInput.classList.remove('input-warning');
+        }
+    });
+}
 
 if (startFreePreviewBtn) {
     startFreePreviewBtn.addEventListener('click', () => startFreePreview());
@@ -370,6 +391,8 @@ async function startFreePreview() {
     for (const file of collectedFiles) {
         formData.append('files', file);
     }
+    const livingAreaSqm = normalizeLivingAreaInput(livingAreaInput ? livingAreaInput.value : '');
+    if (livingAreaSqm !== null) formData.append('living_area_sqm', String(livingAreaSqm));
     formData.append('source', attribution.source);
     formData.append('campaign', attribution.campaign);
 
@@ -412,6 +435,8 @@ async function startCheckout() {
     for (const file of collectedFiles) {
         formData.append('files', file);
     }
+    const livingAreaSqm = normalizeLivingAreaInput(livingAreaInput ? livingAreaInput.value : '');
+    if (livingAreaSqm !== null) formData.append('living_area_sqm', String(livingAreaSqm));
     formData.append('email', emailInput.value.trim());
     formData.append('plan', selectedPlan);
     formData.append('source', attribution.source);
@@ -667,7 +692,7 @@ function renderFreePreview(preview) {
     const einsparpotenzial = Number(preview.einsparpotenzial_geschaetzt_eur || 0);
     const savingsText = einsparpotenzial > 0
         ? `Bis zu ${einsparpotenzial.toLocaleString('de-DE')} € möglich`
-        : 'Einsparpotenzial wird im Vollcheck berechnet';
+        : 'Individuelles Potenzial im Vollcheck (häufig bis zu 317 €)';
     const itemHtml = items.length > 0
         ? items.map((item) => `
             <div class="preview-item ${escapeHTML(item.status_hint || 'hinweis')}">

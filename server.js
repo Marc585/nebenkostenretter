@@ -174,6 +174,17 @@ function sanitizeText(value, maxLen = 200) {
     return trimmed.slice(0, maxLen);
 }
 
+function parseLivingAreaSqm(value) {
+    if (value === undefined || value === null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const normalized = raw.replace(',', '.').replace(/[^0-9.]/g, '');
+    const num = Number(normalized);
+    if (!Number.isFinite(num)) return null;
+    if (num < 10 || num > 500) return null;
+    return Math.round(num * 10) / 10;
+}
+
 function getPlanConfig(planName) {
     return PLAN_CONFIG[planName] || PLAN_CONFIG.basic;
 }
@@ -657,8 +668,14 @@ async function buildContentFromFiles(files) {
 }
 
 // Run Claude analysis and return parsed result
-async function runAnalysis(files) {
+async function runAnalysis(files, analysisContext = {}) {
     const content = await buildContentFromFiles(files);
+    if (analysisContext.livingAreaSqm) {
+        content.push({
+            type: 'text',
+            text: `Zusatzangabe vom Nutzer: Wohnfläche ${analysisContext.livingAreaSqm} m². Verwende diese Angabe für Plausibilitätsprüfungen pro m², falls im Dokument keine Wohnfläche klar erkennbar ist.`,
+        });
+    }
 
     const fileNames = files.map(f => f.originalname).join(', ');
     const totalSize = files.reduce((s, f) => s + f.size, 0);
@@ -712,7 +729,11 @@ async function runAnalysis(files) {
         for (let i = 0; i < openBraces; i++) jsonStr += '}';
     }
 
-    return JSON.parse(jsonStr);
+    const parsed = JSON.parse(jsonStr);
+    if ((!parsed.wohnflaeche_erkannt || parsed.wohnflaeche_erkannt === 'null') && analysisContext.livingAreaSqm) {
+        parsed.wohnflaeche_erkannt = `${analysisContext.livingAreaSqm} m² (vom Nutzer angegeben)`;
+    }
+    return parsed;
 }
 
 function normalizePreviewResult(raw) {
@@ -965,8 +986,14 @@ function applyPreviewLogicGuards(preview) {
     return out;
 }
 
-async function runFreePreview(files) {
+async function runFreePreview(files, analysisContext = {}) {
     const content = await buildContentFromFiles(files);
+    if (analysisContext.livingAreaSqm) {
+        content.push({
+            type: 'text',
+            text: `Zusatzangabe vom Nutzer: Wohnfläche ${analysisContext.livingAreaSqm} m². Nutze diese Angabe für eine bessere Plausibilitätsbewertung.`,
+        });
+    }
     content.push({
         type: 'text',
         text: `Heutiges Datum (für Fristlogik): ${new Date().toLocaleDateString('de-DE')}.`,
@@ -989,7 +1016,11 @@ async function runFreePreview(files) {
         throw new Error('Kein JSON im Vorab-Check gefunden');
     }
 
-    return normalizePreviewResult(JSON.parse(jsonMatch[0]));
+    const normalized = normalizePreviewResult(JSON.parse(jsonMatch[0]));
+    if ((!normalized.erkannte_basisdaten?.wohnflaeche || normalized.erkannte_basisdaten.wohnflaeche === 'null') && analysisContext.livingAreaSqm) {
+        normalized.erkannte_basisdaten.wohnflaeche = `${analysisContext.livingAreaSqm} m² (vom Nutzer angegeben)`;
+    }
+    return normalized;
 }
 
 // === PDF Generation ===
@@ -1179,11 +1210,11 @@ async function sendResultEmail(email, data, pdfBuffer) {
 }
 
 // === Run analysis with automatic retry for transient errors ===
-async function runAnalysisWithRetry(files, maxRetries = 2) {
+async function runAnalysisWithRetry(files, analysisContext = {}, maxRetries = 2) {
     let lastError;
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
         try {
-            return await runAnalysis(files);
+            return await runAnalysis(files, analysisContext);
         } catch (err) {
             lastError = err;
             const isTransient = err.status === 429 || err.status === 500 || err.status === 502 || err.status === 503 || !err.status;
@@ -1238,7 +1269,7 @@ function startBackgroundAnalysis(sessionId) {
 
     activeAnalyses.add(sessionId);
 
-    runAnalysisWithRetry(pending.files)
+    runAnalysisWithRetry(pending.files, { livingAreaSqm: pending.livingAreaSqm || null })
         .then(async (result) => {
             // Check document validation
             if (result.validierung && result.validierung !== 'ok') {
@@ -1334,6 +1365,7 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
         const planConfig = getPlanConfig(selectedPlan);
         const source = sanitizeText(req.body.source || req.query.source, 120);
         const campaign = sanitizeText(req.body.campaign || req.query.campaign, 120);
+        const livingAreaSqm = parseLivingAreaSqm(req.body.living_area_sqm || req.query.living_area_sqm);
 
         const customerEmail = req.body.email || undefined;
 
@@ -1358,6 +1390,7 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
                 plan: selectedPlan,
                 source: source || '',
                 campaign: campaign || '',
+                living_area_sqm: livingAreaSqm ? String(livingAreaSqm) : '',
             },
         });
 
@@ -1373,6 +1406,7 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
             plan: selectedPlan,
             source,
             campaign,
+            livingAreaSqm,
             createdAt: Date.now(),
         });
 
@@ -1395,6 +1429,7 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
             meta: {
                 plan: selectedPlan,
                 file_count: req.files.length,
+                living_area_sqm: livingAreaSqm,
             },
         });
 
@@ -1429,12 +1464,13 @@ app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
 
         const source = sanitizeText(req.body.source || req.query.source, 120);
         const campaign = sanitizeText(req.body.campaign || req.query.campaign, 120);
+        const livingAreaSqm = parseLivingAreaSqm(req.body.living_area_sqm || req.query.living_area_sqm);
 
         appendEvent({
             eventName: 'free_preview_started',
             source,
             campaign,
-            meta: { file_count: req.files.length },
+            meta: { file_count: req.files.length, living_area_sqm: livingAreaSqm },
         });
 
         const files = req.files.map(f => ({
@@ -1444,7 +1480,7 @@ app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
             size: f.size,
         }));
 
-        const preview = await runFreePreview(files);
+        const preview = await runFreePreview(files, { livingAreaSqm });
 
         appendEvent({
             eventName: 'free_preview_completed',
@@ -1454,6 +1490,7 @@ app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
                 file_count: req.files.length,
                 validierung: preview.validierung,
                 auffaelligkeiten: preview.auffaelligkeiten.length,
+                living_area_sqm: livingAreaSqm,
             },
         });
 
@@ -1568,6 +1605,7 @@ app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
             plan: session.metadata?.plan || 'basic',
             source: session.metadata?.source || null,
             campaign: session.metadata?.campaign || null,
+            livingAreaSqm: parseLivingAreaSqm(session.metadata?.living_area_sqm),
             createdAt: Date.now(),
         });
 

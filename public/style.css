@@ -798,6 +798,10 @@ a { color: var(--primary); text-decoration: none; }
 .email-input:focus {
     outline: none; border-color: var(--primary); background: white;
 }
+.email-input.input-warning {
+    border-color: var(--orange);
+    background: #fff8eb;
+}
 .email-input::placeholder { color: var(--text-muted); }
 .email-hint {
     display: block; font-size: 13px; color: var(--text-muted); margin-top: 6px;
