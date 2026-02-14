@@ -519,6 +519,10 @@ WICHTIG:
 - Formuliere konservativ: "Hinweis", "Auffälligkeit", "bitte genauer prüfen".
 - Gib maximal 3 Auffälligkeiten zurück.
 - Wenn das Dokument nicht lesbar/unvollständig/kein Nebenkosten-Dokument ist, setze validierung entsprechend.
+- Datumslogik strikt:
+  1) Abrechnungszeitraum 2024 darf ein Erstellungs-/Zustelldatum in 2025 haben.
+  2) Das ist normal und darf NICHT als "Datum liegt in der Zukunft" markiert werden.
+  3) Hinweis nur, wenn das Datum NACH Fristende liegt (Ende Abrechnungszeitraum + 12 Monate, § 556 Abs. 3 BGB).
 
 Antworte ausschließlich als JSON in genau diesem Format:
 {
@@ -538,6 +542,8 @@ Antworte ausschließlich als JSON in genau diesem Format:
       "status_hint": "hinweis | auffaellig | pruefen"
     }
   ],
+  "einsparpotenzial_geschaetzt_eur": 0,
+  "einsparpotenzial_erklaerung": "1 kurzer Satz, warum dieses Potenzial im Vollcheck realistisch sein kann",
   "naechster_schritt": "1 kurzer Satz mit Empfehlung zur vollständigen Prüfung"
 }`;
 
@@ -720,7 +726,11 @@ function normalizePreviewResult(raw) {
         }))
         : [];
 
-    return {
+    const potNum = Number(safe.einsparpotenzial_geschaetzt_eur);
+    const einsparpotenzial = Number.isFinite(potNum)
+        ? Math.max(0, Math.min(5000, Math.round(potNum)))
+        : 0;
+    return applyPreviewLogicGuards({
         validierung,
         validierung_grund: sanitizeText(safe.validierung_grund, 220),
         dokument_qualitaet: dokumentQualitaet,
@@ -731,13 +741,116 @@ function normalizePreviewResult(raw) {
             gesamtkosten_mieter: sanitizeText(basis.gesamtkosten_mieter, 60),
         },
         auffaelligkeiten,
+        einsparpotenzial_geschaetzt_eur: einsparpotenzial,
+        einsparpotenzial_erklaerung: sanitizeText(safe.einsparpotenzial_erklaerung, 220)
+            || 'Im vollständigen Check werden alle Posten, Umlageschlüssel und Fristen detailliert geprüft.',
         naechster_schritt: sanitizeText(safe.naechster_schritt, 220)
             || 'Wenn Sie sicher gehen möchten, starten Sie die vollständige Prüfung mit fertigem Widerspruchsbrief.',
+    });
+}
+
+function parseGermanDate(dateText) {
+    if (typeof dateText !== 'string') return null;
+    const s = dateText.trim();
+
+    const dotMatch = s.match(/\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b/);
+    if (dotMatch) {
+        const d = Number(dotMatch[1]);
+        const m = Number(dotMatch[2]) - 1;
+        const y = Number(dotMatch[3]);
+        const dt = new Date(y, m, d);
+        if (dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d) return dt;
+    }
+
+    const monthMap = {
+        januar: 0, februar: 1, maerz: 2, märz: 2, april: 3, mai: 4, juni: 5,
+        juli: 6, august: 7, september: 8, oktober: 9, november: 10, dezember: 11,
     };
+    const wordMatch = s.match(/\b(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})\b/);
+    if (wordMatch) {
+        const d = Number(wordMatch[1]);
+        const monthRaw = wordMatch[2].toLowerCase();
+        const y = Number(wordMatch[3]);
+        const m = monthMap[monthRaw];
+        if (typeof m === 'number') {
+            const dt = new Date(y, m, d);
+            if (dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d) return dt;
+        }
+    }
+    return null;
+}
+
+function parsePeriodEndDate(periodText) {
+    if (typeof periodText !== 'string') return null;
+    const matches = periodText.match(/\b\d{1,2}\.\d{1,2}\.\d{4}\b/g);
+    if (!matches || matches.length === 0) return null;
+    return parseGermanDate(matches[matches.length - 1]);
+}
+
+function extractDateFromText(text) {
+    if (typeof text !== 'string') return null;
+    const dot = text.match(/\b\d{1,2}\.\d{1,2}\.\d{4}\b/);
+    if (dot) return parseGermanDate(dot[0]);
+    const word = text.match(/\b\d{1,2}\.\s*[A-Za-zÄÖÜäöü]+\s+\d{4}\b/);
+    if (word) return parseGermanDate(word[0]);
+    return null;
+}
+
+function deriveSavingsFromAuffaelligkeiten(auffaelligkeiten) {
+    let max = 0;
+    for (const item of (auffaelligkeiten || [])) {
+        const text = `${item.titel || ''} ${item.kurz || ''}`;
+        const m = text.match(/(\d{1,3}(?:[.\s]\d{3})*(?:,\d{1,2})?)\s*€/);
+        if (m) {
+            const value = Number(m[1].replace(/\./g, '').replace(/\s/g, '').replace(',', '.'));
+            if (Number.isFinite(value)) max = Math.max(max, Math.round(value));
+        }
+    }
+    return max;
+}
+
+function applyPreviewLogicGuards(preview) {
+    const out = { ...preview, auffaelligkeiten: [...(preview.auffaelligkeiten || [])] };
+    const periodEnd = parsePeriodEndDate(out.erkannte_basisdaten?.abrechnungszeitraum || '');
+    let deadline = null;
+    if (periodEnd) {
+        deadline = new Date(periodEnd);
+        deadline.setFullYear(deadline.getFullYear() + 1);
+    }
+
+    // Filter false "date in future" warnings when date is still within statutory deadline.
+    out.auffaelligkeiten = out.auffaelligkeiten.filter((item) => {
+        const joined = `${item.titel || ''} ${item.kurz || ''}`.toLowerCase();
+        const mentionsFuture = joined.includes('zukunft');
+        if (!mentionsFuture) return true;
+        if (!deadline) return false;
+        const detectedDate = extractDateFromText(`${item.titel || ''} ${item.kurz || ''}`);
+        if (!detectedDate) return false;
+        return detectedDate > deadline;
+    });
+
+    if (out.auffaelligkeiten.length === 0) {
+        out.auffaelligkeiten.push({
+            titel: 'Erste Plausibilitätsprüfung',
+            kurz: 'Die Daten wirken grundsätzlich plausibel. Für belastbare Ergebnisse empfehlen wir die vollständige Prüfung.',
+            status_hint: 'hinweis',
+        });
+    }
+
+    if (!out.einsparpotenzial_geschaetzt_eur || out.einsparpotenzial_geschaetzt_eur <= 0) {
+        const derived = deriveSavingsFromAuffaelligkeiten(out.auffaelligkeiten);
+        out.einsparpotenzial_geschaetzt_eur = Math.max(0, Math.min(5000, derived || 0));
+    }
+
+    return out;
 }
 
 async function runFreePreview(files) {
     const content = await buildContentFromFiles(files);
+    content.push({
+        type: 'text',
+        text: `Heutiges Datum (für Fristlogik): ${new Date().toLocaleDateString('de-DE')}.`,
+    });
     const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 1800,

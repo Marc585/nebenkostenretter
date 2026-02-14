@@ -574,6 +574,10 @@ function renderFreePreview(preview) {
     if (basis.gesamtkosten_mieter) chips.push(`Gesamtkosten: ${basis.gesamtkosten_mieter}`);
 
     const items = Array.isArray(preview.auffaelligkeiten) ? preview.auffaelligkeiten : [];
+    const einsparpotenzial = Number(preview.einsparpotenzial_geschaetzt_eur || 0);
+    const savingsText = einsparpotenzial > 0
+        ? `Bis zu ${einsparpotenzial.toLocaleString('de-DE')} € möglich`
+        : 'Einsparpotenzial wird im Vollcheck berechnet';
     const itemHtml = items.length > 0
         ? items.map((item) => `
             <div class="preview-item ${escapeHTML(item.status_hint || 'hinweis')}">
@@ -589,8 +593,16 @@ function renderFreePreview(preview) {
                 <h3>Kostenloser Vorab-Check</h3>
                 <span class="preview-quality">Dokumentqualität: ${Number(preview.dokument_qualitaet || 0)} / 100 (${escapeHTML(preview.lesbarkeit || 'mittel')})</span>
             </div>
+            <div class="preview-savings-card">
+                <span class="preview-savings-label">Einsparpotenzial</span>
+                <strong class="preview-savings-amount">${escapeHTML(savingsText)}</strong>
+                <p>${escapeHTML(preview.einsparpotenzial_erklaerung || 'Im Vollcheck sehen Sie konkrete Fehler, Beträge und den fertigen Widerspruchsbrief.')}</p>
+            </div>
             <p class="preview-note">Dies ist eine erste Einschätzung. Für konkrete Fehlerbewertung, Ersparnis und fertigen Widerspruchsbrief ist die vollständige Prüfung nötig.</p>
             ${chips.length > 0 ? `<div class="preview-meta">${chips.map((c) => `<span class="preview-chip">${escapeHTML(c)}</span>`).join('')}</div>` : ''}
+            <div class="preview-actions preview-actions-top">
+                <button class="btn" id="proceedFullCheckBtnTop">Jetzt vollständige Prüfung starten (4,99 €)</button>
+            </div>
             <div class="preview-items">${itemHtml}</div>
             <p>${escapeHTML(preview.naechster_schritt || 'Wenn Sie sicher gehen möchten, starten Sie jetzt die vollständige Prüfung für 4,99 €.')}</p>
             <div class="preview-actions">
@@ -600,9 +612,7 @@ function renderFreePreview(preview) {
         </div>
     `;
 
-    const proceedBtn = document.getElementById('proceedFullCheckBtn');
-    if (proceedBtn) {
-        proceedBtn.addEventListener('click', () => {
+    function continueToCheckoutFocus() {
             const target = document.getElementById('emailInput');
             if (target) {
                 target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -611,7 +621,15 @@ function renderFreePreview(preview) {
             startAnalysisBtn.classList.add('checkout-highlight');
             setTimeout(() => startAnalysisBtn.classList.remove('checkout-highlight'), 1800);
             trackEvent('free_preview_to_checkout');
-        });
+    }
+
+    const proceedBtn = document.getElementById('proceedFullCheckBtn');
+    const proceedBtnTop = document.getElementById('proceedFullCheckBtnTop');
+    if (proceedBtn) {
+        proceedBtn.addEventListener('click', continueToCheckoutFocus);
+    }
+    if (proceedBtnTop) {
+        proceedBtnTop.addEventListener('click', continueToCheckoutFocus);
     }
 
     resultPreview.style.display = 'block';

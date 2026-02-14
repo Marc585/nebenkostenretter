@@ -398,6 +398,32 @@ a { color: var(--primary); text-decoration: none; }
     padding: 12px;
     font-size: 14px;
 }
+.preview-savings-card {
+    background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
+    border: 1px solid #a7f3d0;
+    border-radius: var(--radius);
+    padding: 14px;
+}
+.preview-savings-label {
+    display: inline-block;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--primary);
+    font-weight: 700;
+}
+.preview-savings-amount {
+    display: block;
+    margin-top: 4px;
+    font-size: 30px;
+    line-height: 1.1;
+    color: var(--primary-dark);
+}
+.preview-savings-card p {
+    margin-top: 6px;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
 .preview-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .preview-chip {
     background: var(--bg);
@@ -419,6 +445,7 @@ a { color: var(--primary); text-decoration: none; }
 .preview-item.auffaellig { border-color: var(--orange-light); background: var(--orange-bg); }
 .preview-item.pruefen { border-color: #fde68a; background: #fffbeb; }
 .preview-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.preview-actions-top { margin-top: -2px; }
 .checkout-highlight { box-shadow: 0 0 0 3px rgba(26, 107, 74, 0.18); }
 
 /* OK items */
