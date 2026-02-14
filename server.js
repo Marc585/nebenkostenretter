@@ -1348,6 +1348,11 @@ function startBackgroundAnalysis(sessionId) {
 
 async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
     try {
+        const consentAccepted = req.body?.consent === '1' || req.body?.consent === 'true' || req.body?.consent === true;
+        if (!consentAccepted) {
+            return res.status(400).json({ error: 'Bitte stimmen Sie der Datenverarbeitung zu (Pflichtangabe).' });
+        }
+
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
         }
@@ -1455,6 +1460,11 @@ app.post('/api/create-checkout-v2', upload.array('files', 5), async (req, res) =
 // === Kostenloser Vorab-Check (ohne Zahlung) ===
 app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
     try {
+        const consentAccepted = req.body?.consent === '1' || req.body?.consent === 'true' || req.body?.consent === true;
+        if (!consentAccepted) {
+            return res.status(400).json({ error: 'Bitte stimmen Sie der Datenverarbeitung zu (Pflichtangabe).' });
+        }
+
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
         }

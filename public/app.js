@@ -201,7 +201,7 @@ function updateButtonState() {
     const emailValid = emailInput.value.trim() !== '' && emailInput.validity.valid;
     startAnalysisBtn.disabled = freePreviewRunning || !(hasFiles && consentCheckbox.checked && emailValid);
     if (startFreePreviewBtn) {
-        startFreePreviewBtn.disabled = freePreviewRunning || !hasFiles;
+        startFreePreviewBtn.disabled = freePreviewRunning || !(hasFiles && consentCheckbox.checked);
     }
 }
 
@@ -392,6 +392,11 @@ function removeFile(index) {
 // === Upload files to server + redirect to Stripe Checkout ===
 async function startFreePreview() {
     if (collectedFiles.length === 0 || freePreviewRunning) return;
+    if (!consentCheckbox.checked) {
+        alert('Bitte bestätigen Sie zuerst die Datenverarbeitung in der Checkbox, bevor der Vorab-Check startet.');
+        consentCheckbox.focus();
+        return;
+    }
     const attribution = getAttribution();
     freePreviewRunning = true;
     updateButtonState();
@@ -402,6 +407,7 @@ async function startFreePreview() {
     for (const file of collectedFiles) {
         formData.append('files', file);
     }
+    formData.append('consent', consentCheckbox.checked ? '1' : '0');
     const livingAreaSqm = normalizeLivingAreaInput(livingAreaInput ? livingAreaInput.value : '');
     if (livingAreaSqm !== null) formData.append('living_area_sqm', String(livingAreaSqm));
     formData.append('source', attribution.source);
@@ -483,6 +489,11 @@ function clearFreePreviewLoading() {
 
 async function startCheckout() {
     if (collectedFiles.length === 0) return;
+    if (!consentCheckbox.checked) {
+        alert('Bitte bestätigen Sie zuerst die Datenverarbeitung in der Checkbox, bevor Sie die Prüfung starten.');
+        consentCheckbox.focus();
+        return;
+    }
     const attribution = getAttribution();
 
     // Disable button and show loading state
@@ -494,6 +505,7 @@ async function startCheckout() {
     for (const file of collectedFiles) {
         formData.append('files', file);
     }
+    formData.append('consent', consentCheckbox.checked ? '1' : '0');
     const livingAreaSqm = normalizeLivingAreaInput(livingAreaInput ? livingAreaInput.value : '');
     if (livingAreaSqm !== null) formData.append('living_area_sqm', String(livingAreaSqm));
     formData.append('email', emailInput.value.trim());
