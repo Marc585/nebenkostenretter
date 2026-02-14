@@ -95,10 +95,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Rate limiting
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 30, // max 30 API requests per window
+    // `/api/result/:sessionId` is polled while the analysis runs. Keep API protection,
+    // but don't rate-limit high-frequency polling/telemetry endpoints.
+    max: 120, // max requests per window (other endpoints remain protected)
     message: { error: 'Zu viele Anfragen. Bitte versuchen Sie es in einigen Minuten erneut.' },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => {
+        // req.path is relative to the mount path `/api/`
+        return (
+            req.path.startsWith('/result/') ||
+            req.path.startsWith('/track-event') ||
+            req.path.startsWith('/download-pdf/')
+        );
+    },
 });
 app.use('/api/', apiLimiter);
 

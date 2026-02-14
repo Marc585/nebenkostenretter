@@ -136,7 +136,20 @@ function pollForResults(sessionId) {
     const poll = async () => {
         try {
             const res = await fetch(`/api/result/${encodeURIComponent(sessionId)}`);
-            const data = await res.json();
+            if (!res.ok) {
+                // Keep polling on transient errors / rate limits.
+                const delay = res.status === 429 ? 6000 : 3500;
+                setTimeout(poll, delay);
+                return;
+            }
+
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                setTimeout(poll, 3500);
+                return;
+            }
 
             if (data.status === 'done') {
                 analysisResult = data.data;
@@ -149,9 +162,9 @@ function pollForResults(sessionId) {
                 apiDone = true;
                 // Keep session_id in localStorage for retry
                 trackEvent('analysis_error', { error_type: analysisErrorType });
-            } else if (data.status === 'processing') {
-                // Keep polling every 2 seconds
-                setTimeout(poll, 2000);
+            } else {
+                // `processing` or unexpected payload: keep polling with sane backoff
+                setTimeout(poll, 3500);
             }
         } catch (err) {
             // Network error — retry in 3 seconds
