@@ -547,6 +547,16 @@ async function startCheckout() {
     formData.append('plan', selectedPlan);
     formData.append('source', attribution.source);
     formData.append('campaign', attribution.campaign);
+
+    // Attach a small preview snapshot (if available) so the full report can stay consistent
+    // and explain deviations (preview is only a cautious estimate).
+    try {
+        const raw = localStorage.getItem('nk_last_preview');
+        if (raw && raw.length < 12000) {
+            formData.append('preview_snapshot', raw);
+        }
+    } catch (e) {}
+
     trackEvent('checkout_clicked', { file_count: collectedFiles.length });
 
     try {
@@ -832,6 +842,11 @@ function renderFreePreview(preview) {
         return;
     }
 
+    // Store preview locally so the paid check can reference it (consistency / reconciliation).
+    try {
+        localStorage.setItem('nk_last_preview', JSON.stringify(preview));
+    } catch (e) {}
+
     const basis = preview.erkannte_basisdaten || {};
     const chips = [];
     if (basis.abrechnungszeitraum) chips.push(`Zeitraum: ${basis.abrechnungszeitraum}`);
@@ -841,8 +856,8 @@ function renderFreePreview(preview) {
     const items = Array.isArray(preview.auffaelligkeiten) ? preview.auffaelligkeiten : [];
     const einsparpotenzial = Number(preview.einsparpotenzial_geschaetzt_eur || 0);
     const savingsText = einsparpotenzial > 0
-        ? `Bis zu ${einsparpotenzial.toLocaleString('de-DE')} € möglich`
-        : 'Individuelles Potenzial im Vollcheck (häufig bis zu 317 €)';
+        ? `Vorab-Schätzung: bis zu ${einsparpotenzial.toLocaleString('de-DE')} €`
+        : 'Vorab: kein konkretes Einsparpotenzial erkannt';
     const itemHtml = items.length > 0
         ? items.map((item) => `
             <div class="preview-item ${escapeHTML(item.status_hint || 'hinweis')}">
@@ -893,6 +908,9 @@ function renderFreePreview(preview) {
                 <span class="preview-savings-label">Einsparpotenzial</span>
                 <strong class="preview-savings-amount">${escapeHTML(savingsText)}</strong>
                 <p>${escapeHTML(preview.einsparpotenzial_erklaerung || 'Im Vollcheck sehen Sie konkrete Fehler, Beträge und den fertigen Widerspruchsbrief.')}</p>
+                <p class="preview-note" style="margin-top:10px;">
+                    Hinweis: Der Vorab-Check ist eine vorsichtige Ersteinschätzung. Im Vollcheck wird das Potenzial bestätigt oder kann sich auch auf 0 € reduzieren, wenn sich Hinweise nicht belegen lassen.
+                </p>
             </div>
             <p class="preview-note">Dies ist eine erste Einschätzung. Für konkrete Fehlerbewertung, Ersparnis und fertigen Widerspruchsbrief ist die vollständige Prüfung nötig.</p>
             ${chips.length > 0 ? `<div class="preview-meta">${chips.map((c) => `<span class="preview-chip">${escapeHTML(c)}</span>`).join('')}</div>` : ''}

@@ -548,6 +548,13 @@ WICHTIG:
   1) Abrechnungszeitraum 2024 darf ein Erstellungs-/Zustelldatum in 2025 haben.
   2) Das ist normal und darf NICHT als "Datum liegt in der Zukunft" markiert werden.
   3) Hinweis nur, wenn das Datum NACH Fristende liegt (Ende Abrechnungszeitraum + 12 Monate, § 556 Abs. 3 BGB).
+ - Einsparpotenzial strikt:
+   - Setze "einsparpotenzial_geschaetzt_eur" nur dann > 0, wenn du mindestens EINEN konkreten, nachvollziehbaren Ansatz hast,
+     der plausibel zu einer Rückforderung führen kann (z.B. nicht umlagefähiger Posten mit Betrag, nachweisbarer Rechenfehler,
+     oder Fristüberschreitung).
+   - NIEMALS Einsparpotenzial aus Gesamtsummen oder beliebigen €-Beträgen im Dokument ableiten.
+   - Wenn du nur Plausibilität/Warnhinweise hast oder dir Informationen fehlen: setze einsparpotenzial_geschaetzt_eur = 0 und erkläre,
+     dass das Potenzial im Vollcheck erst belastbar bestimmt werden kann.
 
 Antworte ausschließlich als JSON in genau diesem Format:
 {
@@ -688,6 +695,21 @@ async function runAnalysis(files, analysisContext = {}) {
         content.push({
             type: 'text',
             text: `Zusatzangabe vom Nutzer: Wohnfläche ${analysisContext.livingAreaSqm} m². Verwende diese Angabe für Plausibilitätsprüfungen pro m², falls im Dokument keine Wohnfläche klar erkennbar ist.`,
+        });
+    }
+    if (analysisContext.previewSnapshot && typeof analysisContext.previewSnapshot === 'object') {
+        const pv = analysisContext.previewSnapshot;
+        const pvPot = Number(pv.einsparpotenzial_geschaetzt_eur || 0);
+        const pvPotSafe = Number.isFinite(pvPot) ? Math.max(0, Math.min(5000, Math.round(pvPot))) : 0;
+        const pvReason = typeof pv.einsparpotenzial_erklaerung === 'string' ? pv.einsparpotenzial_erklaerung : '';
+        content.push({
+            type: 'text',
+            text:
+                `Kontext: Der kostenlose Vorab-Check hat folgende vorsichtige Schätzung geliefert:\n` +
+                `- Vorab-Einsparpotenzial (Schätzung): ${pvPotSafe} €\n` +
+                (pvReason ? `- Begründung: ${pvReason}\n` : '') +
+                `WICHTIG: Stelle sicher, dass dein Ergebnis konsistent ist. Wenn du im Vollcheck zu 0 € kommst, ` +
+                `erkläre kurz in der Zusammenfassung, warum die Vorab-Schätzung sich nicht bestätigt (z.B. nur Plausibilitäts-Hinweise, fehlende Belege, keine bombensicheren Fehler).`,
         });
     }
 
@@ -992,10 +1014,9 @@ function applyPreviewLogicGuards(preview) {
         },
     ]);
 
-    if (!out.einsparpotenzial_geschaetzt_eur || out.einsparpotenzial_geschaetzt_eur <= 0) {
-        const derived = deriveSavingsFromAuffaelligkeiten(out.auffaelligkeiten);
-        out.einsparpotenzial_geschaetzt_eur = Math.max(0, Math.min(5000, derived || 0));
-    }
+    // IMPORTANT: Never "invent" savings numbers from arbitrary € amounts inside hints.
+    // This caused mismatches vs the paid full report (e.g. totals/line items being interpreted as savings).
+    // Only use the model-provided preview estimate (which itself should be conservative).
 
     return out;
 }
@@ -1283,7 +1304,7 @@ function startBackgroundAnalysis(sessionId) {
 
     activeAnalyses.add(sessionId);
 
-    runAnalysisWithRetry(pending.files, { livingAreaSqm: pending.livingAreaSqm || null })
+    runAnalysisWithRetry(pending.files, { livingAreaSqm: pending.livingAreaSqm || null, previewSnapshot: pending.previewSnapshot || null })
         .then(async (result) => {
             // Check document validation
             if (result.validierung && result.validierung !== 'ok') {
@@ -1385,6 +1406,21 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
         const source = sanitizeText(req.body.source || req.query.source, 120);
         const campaign = sanitizeText(req.body.campaign || req.query.campaign, 120);
         const livingAreaSqm = parseLivingAreaSqm(req.body.living_area_sqm || req.query.living_area_sqm);
+        let previewSnapshot = null;
+        try {
+            const rawPreview = typeof req.body.preview_snapshot === 'string' ? req.body.preview_snapshot : '';
+            if (rawPreview && rawPreview.length < 12000) {
+                const parsed = JSON.parse(rawPreview);
+                // Only keep a minimal safe subset (avoid trusting client data too much).
+                previewSnapshot = {
+                    einsparpotenzial_geschaetzt_eur: Number(parsed?.einsparpotenzial_geschaetzt_eur || 0) || 0,
+                    einsparpotenzial_erklaerung: sanitizeText(parsed?.einsparpotenzial_erklaerung, 220) || '',
+                    fristcheck_status: sanitizeText(parsed?.fristcheck?.status, 40) || '',
+                };
+            }
+        } catch (e) {
+            previewSnapshot = null;
+        }
 
         const customerEmail = req.body.email || undefined;
 
@@ -1426,6 +1462,7 @@ async function createCheckoutHandler(req, res, fallbackPlan = 'basic') {
             source,
             campaign,
             livingAreaSqm,
+            previewSnapshot,
             createdAt: Date.now(),
         });
 
@@ -1635,6 +1672,7 @@ app.post('/api/retry-analysis', upload.array('files', 5), async (req, res) => {
             source: session.metadata?.source || null,
             campaign: session.metadata?.campaign || null,
             livingAreaSqm: parseLivingAreaSqm(session.metadata?.living_area_sqm),
+            previewSnapshot: null,
             createdAt: Date.now(),
         });
 
