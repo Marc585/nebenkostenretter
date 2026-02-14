@@ -135,7 +135,7 @@ function pollForResults(sessionId) {
 
     const poll = async () => {
         try {
-            const res = await fetch(`/api/result/${encodeURIComponent(sessionId)}`);
+            const res = await fetch(`/api/result/${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
             if (!res.ok) {
                 // Keep polling on transient errors / rate limits.
                 const delay = res.status === 429 ? 6000 : 3500;

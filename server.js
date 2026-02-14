@@ -1528,6 +1528,11 @@ app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
 // === STEP 2: Poll for analysis result ===
 // Client calls this repeatedly. First call triggers the analysis, subsequent calls check status.
 app.get('/api/result/:sessionId', async (req, res) => {
+    // Never cache polling responses. Some browsers will send If-None-Match and receive 304,
+    // which breaks JSON parsing and leaves the UI stuck in "processing".
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     try {
         const { sessionId } = req.params;
 
