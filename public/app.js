@@ -22,6 +22,7 @@ let apiDone = false;
 let selectedPlan = 'basic';
 let uploadTracked = false;
 let freePreviewRunning = false;
+const fileQualityHints = new Map();
 
 const PLAN_LABELS = {
     basic: 'Für 4,99 € prüfen lassen',
@@ -192,6 +193,83 @@ function formatFileSize(bytes) {
     return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
+function getFileKey(file) {
+    return `${file.name}__${file.size}__${file.lastModified}`;
+}
+
+function setFileQualityHint(file, hint) {
+    fileQualityHints.set(getFileKey(file), hint);
+}
+
+function getFileQualityHint(file) {
+    return fileQualityHints.get(getFileKey(file));
+}
+
+function assessImageDimensions(file) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            const width = img.naturalWidth || 0;
+            const height = img.naturalHeight || 0;
+            URL.revokeObjectURL(url);
+            resolve({ width, height });
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve({ width: 0, height: 0 });
+        };
+        img.src = url;
+    });
+}
+
+async function analyzeFileQuality(file) {
+    if (file.type === 'application/pdf') {
+        setFileQualityHint(file, {
+            status: 'ok',
+            label: 'PDF erkannt',
+            detail: 'Gut für mehrseitige Abrechnungen.',
+        });
+        return;
+    }
+
+    const dims = await assessImageDimensions(file);
+    const minEdge = Math.min(dims.width || 0, dims.height || 0);
+    const fileKb = Math.round(file.size / 1024);
+
+    if (minEdge > 0 && minEdge < 900) {
+        setFileQualityHint(file, {
+            status: 'warn',
+            label: 'Qualität prüfen',
+            detail: `Auflösung eher niedrig (${dims.width}x${dims.height}px).`,
+        });
+        return;
+    }
+
+    if (fileKb < 120) {
+        setFileQualityHint(file, {
+            status: 'warn',
+            label: 'Möglicherweise unscharf',
+            detail: `Datei ist klein (${fileKb} KB). Bitte Lesbarkeit prüfen.`,
+        });
+        return;
+    }
+
+    setFileQualityHint(file, {
+        status: 'ok',
+        label: 'Gut lesbar (voraussichtlich)',
+        detail: `${dims.width || '?'}x${dims.height || '?'} px`,
+    });
+}
+
+async function refreshFileQualityHints() {
+    const tasks = collectedFiles.map((file) => {
+        if (getFileQualityHint(file)) return Promise.resolve();
+        return analyzeFileQuality(file);
+    });
+    await Promise.all(tasks);
+}
+
 function addFiles(files) {
     const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
 
@@ -219,6 +297,7 @@ function addFiles(files) {
         // For PDFs, replace the file list (single PDF = whole document)
         if (file.type === 'application/pdf') {
             collectedFiles = [file];
+            fileQualityHints.clear();
         } else {
             collectedFiles.push(file);
         }
@@ -226,6 +305,7 @@ function addFiles(files) {
 
     if (collectedFiles.length > 0) {
         renderFileList();
+        refreshFileQualityHints().then(() => renderFileList());
         if (!uploadTracked) {
             uploadTracked = true;
             trackEvent('upload_added', { file_count: collectedFiles.length });
@@ -241,17 +321,27 @@ function renderFileList() {
     fileList.style.display = 'block';
     resultPreview.style.display = 'none';
 
-    fileListItems.innerHTML = collectedFiles.map((f, i) => `
+    fileListItems.innerHTML = collectedFiles.map((f, i) => {
+        const hint = getFileQualityHint(f);
+        const hintClass = hint?.status === 'warn' ? 'warn' : 'ok';
+        return `
         <div class="file-list-item">
             <span class="file-list-icon">${f.type === 'application/pdf' ? '&#128196;' : '&#128247;'}</span>
-            <span class="file-list-name">${escapeHTML(f.name)}</span>
+            <span class="file-list-name-wrap">
+                <span class="file-list-name">${escapeHTML(f.name)}</span>
+                ${hint ? `<span class="file-quality-badge ${hintClass}">${escapeHTML(hint.label)}</span>` : ''}
+                ${hint?.detail ? `<span class="file-quality-detail">${escapeHTML(hint.detail)}</span>` : ''}
+            </span>
             <span class="file-list-size">${formatFileSize(f.size)}</span>
             <button class="file-list-remove" onclick="removeFile(${i})" title="Entfernen">&times;</button>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function removeFile(index) {
+    const file = collectedFiles[index];
+    if (file) fileQualityHints.delete(getFileKey(file));
     collectedFiles.splice(index, 1);
     if (collectedFiles.length === 0) {
         resetUpload();
@@ -587,6 +677,37 @@ function renderFreePreview(preview) {
         `).join('')
         : '<div class="preview-item hinweis"><strong>Keine klaren Auffälligkeiten im Vorab-Check.</strong><p>Für eine belastbare Bewertung empfehlen wir trotzdem die vollständige Prüfung.</p></div>';
 
+    const fieldLabels = {
+        abrechnungszeitraum: 'Abrechnungszeitraum',
+        abrechnungsdatum: 'Abrechnungsdatum',
+        wohnflaeche: 'Wohnfläche',
+        gesamtkosten_mieter: 'Gesamtkosten (Mieter)',
+        vorauszahlungen: 'Vorauszahlungen',
+        nachzahlung_oder_guthaben: 'Nachzahlung/Guthaben',
+    };
+    const recognizedRows = Array.isArray(preview.erkannte_daten) ? preview.erkannte_daten : [];
+    const recognizedRowsHtml = recognizedRows.length > 0
+        ? recognizedRows.map((row, idx) => `
+            <div class="recognized-row">
+                <div class="recognized-row-main">
+                    <span class="recognized-label">${escapeHTML(fieldLabels[row.feld] || row.feld || 'Feld')}</span>
+                    <span class="recognized-confidence ${row.confidence === 'sicher' ? 'ok' : 'warn'}">${row.confidence === 'sicher' ? 'sicher' : 'unsicher'}</span>
+                </div>
+                <div class="recognized-edit-wrap">
+                    <input class="recognized-input" id="recognizedInput_${idx}" type="text" value="${escapeHTML(row.wert || '')}" data-field="${escapeHTML(row.feld || '')}">
+                </div>
+            </div>
+        `).join('')
+        : '<p class="recognized-empty">Noch keine strukturierten Felder erkannt. Im Vollcheck werden alle Werte vollständig geprüft.</p>';
+
+    const frist = preview.fristcheck || {};
+    const fristStatusLabel = frist.status === 'fristgerecht'
+        ? 'Frist voraussichtlich eingehalten'
+        : frist.status === 'frist_ueberschritten'
+            ? 'Frist möglicherweise überschritten'
+            : 'Frist aktuell nicht sicher bestimmbar';
+    const fristStatusClass = frist.status === 'fristgerecht' ? 'ok' : (frist.status === 'frist_ueberschritten' ? 'warn' : 'neutral');
+
     resultPreview.innerHTML = `
         <div class="result-summary free-preview">
             <div class="preview-headline">
@@ -600,8 +721,28 @@ function renderFreePreview(preview) {
             </div>
             <p class="preview-note">Dies ist eine erste Einschätzung. Für konkrete Fehlerbewertung, Ersparnis und fertigen Widerspruchsbrief ist die vollständige Prüfung nötig.</p>
             ${chips.length > 0 ? `<div class="preview-meta">${chips.map((c) => `<span class="preview-chip">${escapeHTML(c)}</span>`).join('')}</div>` : ''}
-            <div class="preview-actions preview-actions-top">
+            <div class="preview-actions preview-actions-top preview-sticky-cta">
                 <button class="btn" id="proceedFullCheckBtnTop">Jetzt vollständige Prüfung starten (4,99 €)</button>
+                <span class="preview-cta-trust">Kein Abo · Auto-Erstattung bei unlesbaren Dokumenten · DSGVO-konform</span>
+            </div>
+            <div class="preview-recognized">
+                <h4>Aus Ihrem Dokument erkannt</h4>
+                <p class="preview-recognized-sub">Stimmt das? Sie können Werte bei Bedarf direkt anpassen.</p>
+                <div class="recognized-grid">
+                    ${recognizedRowsHtml}
+                </div>
+            </div>
+            <div class="preview-deadline-card ${fristStatusClass}">
+                <div class="preview-deadline-head">
+                    <h4>Frist-Check nach § 556 Abs. 3 BGB</h4>
+                    <span class="deadline-status ${fristStatusClass}">${escapeHTML(fristStatusLabel)}</span>
+                </div>
+                <div class="deadline-meta">
+                    <span>Zeitraum-Ende: ${escapeHTML(frist.zeitraum_ende || 'nicht erkannt')}</span>
+                    <span>Fristende: ${escapeHTML(frist.fristende || 'nicht erkannt')}</span>
+                    <span>Abrechnungsdatum: ${escapeHTML(frist.abrechnungsdatum || 'nicht erkannt')}</span>
+                </div>
+                <p>${escapeHTML(frist.erklaerung || 'Frist konnte im Vorab-Check nicht sicher bestimmt werden.')}</p>
             </div>
             <div class="preview-items">${itemHtml}</div>
             <p>${escapeHTML(preview.naechster_schritt || 'Wenn Sie sicher gehen möchten, starten Sie jetzt die vollständige Prüfung für 4,99 €.')}</p>
@@ -631,6 +772,14 @@ function renderFreePreview(preview) {
     if (proceedBtnTop) {
         proceedBtnTop.addEventListener('click', continueToCheckoutFocus);
     }
+
+    document.querySelectorAll('.recognized-input').forEach((input) => {
+        input.addEventListener('change', () => {
+            trackEvent('preview_data_edited', {
+                field: input.getAttribute('data-field') || 'unknown',
+            });
+        });
+    });
 
     resultPreview.style.display = 'block';
     resultPreview.style.animation = 'fadeInUp 0.5s ease';
@@ -858,6 +1007,7 @@ function resetUpload() {
     collectedFiles = [];
     uploadTracked = false;
     freePreviewRunning = false;
+    fileQualityHints.clear();
     uploadArea.style.display = 'block';
     fileList.style.display = 'none';
     uploadProgress.style.display = 'none';

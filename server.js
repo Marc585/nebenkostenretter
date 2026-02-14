@@ -542,6 +542,20 @@ Antworte ausschließlich als JSON in genau diesem Format:
       "status_hint": "hinweis | auffaellig | pruefen"
     }
   ],
+  "erkannte_daten": [
+    {
+      "feld": "abrechnungszeitraum | abrechnungsdatum | wohnflaeche | gesamtkosten_mieter | vorauszahlungen | nachzahlung_oder_guthaben",
+      "wert": "String",
+      "confidence": "sicher | unsicher"
+    }
+  ],
+  "fristcheck": {
+    "zeitraum_ende": "DD.MM.YYYY oder null",
+    "fristende": "DD.MM.YYYY oder null",
+    "abrechnungsdatum": "DD.MM.YYYY oder null",
+    "status": "fristgerecht | frist_ueberschritten | nicht_ermittelbar",
+    "erklaerung": "Kurze Erklärung"
+  },
   "einsparpotenzial_geschaetzt_eur": 0,
   "einsparpotenzial_erklaerung": "1 kurzer Satz, warum dieses Potenzial im Vollcheck realistisch sein kann",
   "naechster_schritt": "1 kurzer Satz mit Empfehlung zur vollständigen Prüfung"
@@ -730,6 +744,19 @@ function normalizePreviewResult(raw) {
     const einsparpotenzial = Number.isFinite(potNum)
         ? Math.max(0, Math.min(5000, Math.round(potNum)))
         : 0;
+    const erkannteDatenRaw = Array.isArray(safe.erkannte_daten)
+        ? safe.erkannte_daten.slice(0, 10)
+        : [];
+    const erkannteDaten = erkannteDatenRaw
+        .map((row) => ({
+            feld: sanitizeText(row?.feld, 80),
+            wert: sanitizeText(row?.wert, 120),
+            confidence: ['sicher', 'unsicher'].includes(row?.confidence) ? row.confidence : 'unsicher',
+        }))
+        .filter((row) => row.feld && row.wert);
+    const fristRaw = safe.fristcheck && typeof safe.fristcheck === 'object'
+        ? safe.fristcheck
+        : {};
     return applyPreviewLogicGuards({
         validierung,
         validierung_grund: sanitizeText(safe.validierung_grund, 220),
@@ -741,6 +768,16 @@ function normalizePreviewResult(raw) {
             gesamtkosten_mieter: sanitizeText(basis.gesamtkosten_mieter, 60),
         },
         auffaelligkeiten,
+        erkannte_daten: erkannteDaten,
+        fristcheck: {
+            zeitraum_ende: sanitizeText(fristRaw.zeitraum_ende, 30),
+            fristende: sanitizeText(fristRaw.fristende, 30),
+            abrechnungsdatum: sanitizeText(fristRaw.abrechnungsdatum, 30),
+            status: ['fristgerecht', 'frist_ueberschritten', 'nicht_ermittelbar'].includes(fristRaw.status)
+                ? fristRaw.status
+                : 'nicht_ermittelbar',
+            erklaerung: sanitizeText(fristRaw.erklaerung, 220),
+        },
         einsparpotenzial_geschaetzt_eur: einsparpotenzial,
         einsparpotenzial_erklaerung: sanitizeText(safe.einsparpotenzial_erklaerung, 220)
             || 'Im vollständigen Check werden alle Posten, Umlageschlüssel und Fristen detailliert geprüft.',
@@ -796,6 +833,33 @@ function extractDateFromText(text) {
     return null;
 }
 
+function formatDateDE(dateObj) {
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return null;
+    const dd = String(dateObj.getDate()).padStart(2, '0');
+    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const yyyy = String(dateObj.getFullYear());
+    return `${dd}.${mm}.${yyyy}`;
+}
+
+function getRecognizedValue(recognizedRows, wantedField) {
+    const hit = (recognizedRows || []).find((r) => r.feld === wantedField && r.wert);
+    return hit ? hit.wert : null;
+}
+
+function mergeRecognizedData(base, additions) {
+    const list = Array.isArray(base) ? [...base] : [];
+    for (const row of additions) {
+        if (!row || !row.feld || !row.wert) continue;
+        const idx = list.findIndex((x) => x.feld === row.feld);
+        if (idx >= 0) {
+            list[idx] = row;
+        } else {
+            list.push(row);
+        }
+    }
+    return list.slice(0, 12);
+}
+
 function deriveSavingsFromAuffaelligkeiten(auffaelligkeiten) {
     let max = 0;
     for (const item of (auffaelligkeiten || [])) {
@@ -810,7 +874,11 @@ function deriveSavingsFromAuffaelligkeiten(auffaelligkeiten) {
 }
 
 function applyPreviewLogicGuards(preview) {
-    const out = { ...preview, auffaelligkeiten: [...(preview.auffaelligkeiten || [])] };
+    const out = {
+        ...preview,
+        auffaelligkeiten: [...(preview.auffaelligkeiten || [])],
+        erkannte_daten: [...(preview.erkannte_daten || [])],
+    };
     const periodEnd = parsePeriodEndDate(out.erkannte_basisdaten?.abrechnungszeitraum || '');
     let deadline = null;
     if (periodEnd) {
@@ -836,6 +904,58 @@ function applyPreviewLogicGuards(preview) {
             status_hint: 'hinweis',
         });
     }
+
+    const abrechnungszeitraumText = out.erkannte_basisdaten?.abrechnungszeitraum || null;
+    const abrechnungsdatumFromRows = getRecognizedValue(out.erkannte_daten, 'abrechnungsdatum');
+    const abrechnungsdatumFromHints = out.auffaelligkeiten
+        .map((item) => extractDateFromText(`${item.titel || ''} ${item.kurz || ''}`))
+        .find(Boolean);
+    const abrechnungsdatum = parseGermanDate(abrechnungsdatumFromRows || '') || abrechnungsdatumFromHints || null;
+
+    const fristcheck = {
+        zeitraum_ende: periodEnd ? formatDateDE(periodEnd) : null,
+        fristende: deadline ? formatDateDE(deadline) : null,
+        abrechnungsdatum: abrechnungsdatum ? formatDateDE(abrechnungsdatum) : null,
+        status: 'nicht_ermittelbar',
+        erklaerung: 'Frist konnte im Vorab-Check nicht sicher berechnet werden.',
+    };
+    if (deadline && abrechnungsdatum) {
+        if (abrechnungsdatum <= deadline) {
+            fristcheck.status = 'fristgerecht';
+            fristcheck.erklaerung = `Abrechnung datiert auf ${formatDateDE(abrechnungsdatum)}. Fristende für den Zeitraum ist ${formatDateDE(deadline)}.`;
+        } else {
+            fristcheck.status = 'frist_ueberschritten';
+            fristcheck.erklaerung = `Abrechnung datiert auf ${formatDateDE(abrechnungsdatum)} und liegt nach dem Fristende ${formatDateDE(deadline)}.`;
+        }
+    } else if (deadline && !abrechnungsdatum) {
+        fristcheck.erklaerung = `Fristende wäre ${formatDateDE(deadline)}, aber ein Abrechnungsdatum wurde nicht sicher erkannt.`;
+    } else if (abrechnungszeitraumText) {
+        fristcheck.erklaerung = 'Abrechnungszeitraum erkannt, aber Fristende konnte nicht sicher bestimmt werden.';
+    }
+    out.fristcheck = fristcheck;
+
+    out.erkannte_daten = mergeRecognizedData(out.erkannte_daten, [
+        {
+            feld: 'abrechnungszeitraum',
+            wert: abrechnungszeitraumText || '',
+            confidence: abrechnungszeitraumText ? 'sicher' : 'unsicher',
+        },
+        {
+            feld: 'abrechnungsdatum',
+            wert: fristcheck.abrechnungsdatum || '',
+            confidence: fristcheck.abrechnungsdatum ? 'sicher' : 'unsicher',
+        },
+        {
+            feld: 'wohnflaeche',
+            wert: out.erkannte_basisdaten?.wohnflaeche || '',
+            confidence: out.erkannte_basisdaten?.wohnflaeche ? 'sicher' : 'unsicher',
+        },
+        {
+            feld: 'gesamtkosten_mieter',
+            wert: out.erkannte_basisdaten?.gesamtkosten_mieter || '',
+            confidence: out.erkannte_basisdaten?.gesamtkosten_mieter ? 'sicher' : 'unsicher',
+        },
+    ]);
 
     if (!out.einsparpotenzial_geschaetzt_eur || out.einsparpotenzial_geschaetzt_eur <= 0) {
         const derived = deriveSavingsFromAuffaelligkeiten(out.auffaelligkeiten);
