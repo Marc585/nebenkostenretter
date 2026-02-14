@@ -10,6 +10,7 @@ const emailInput = document.getElementById('emailInput');
 const livingAreaInput = document.getElementById('livingAreaInput');
 const uploadProgress = document.getElementById('uploadProgress');
 const resultPreview = document.getElementById('resultPreview');
+const pageLoader = document.getElementById('pageLoader');
 
 // Collected files
 let collectedFiles = [];
@@ -24,6 +25,7 @@ let selectedPlan = 'basic';
 let uploadTracked = false;
 let freePreviewRunning = false;
 const fileQualityHints = new Map();
+let previewLoadingInterval = null;
 
 const PLAN_LABELS = {
     basic: 'Für 4,99 € prüfen lassen',
@@ -111,6 +113,21 @@ function trackEvent(eventName, extra = {}) {
 
 trackEvent('page_view');
 updateButtonState();
+
+function hidePageLoader() {
+    if (!pageLoader) return;
+    pageLoader.classList.add('hidden');
+    setTimeout(() => {
+        if (pageLoader && pageLoader.parentNode) {
+            pageLoader.parentNode.removeChild(pageLoader);
+        }
+    }, 320);
+}
+
+window.addEventListener('load', () => {
+    setTimeout(hidePageLoader, 250);
+});
+setTimeout(hidePageLoader, 1800);
 
 // === Poll server for analysis result ===
 function pollForResults(sessionId) {
@@ -379,13 +396,7 @@ async function startFreePreview() {
     freePreviewRunning = true;
     updateButtonState();
     trackEvent('free_preview_clicked', { file_count: collectedFiles.length });
-
-    resultPreview.style.display = 'block';
-    resultPreview.innerHTML = `
-        <div class="result-summary">
-            <p><strong>Kostenloser Vorab-Check läuft...</strong><br>Wir prüfen jetzt Lesbarkeit und erste Auffälligkeiten. Das dauert in der Regel unter 30 Sekunden.</p>
-        </div>
-    `;
+    renderFreePreviewLoading();
 
     const formData = new FormData();
     for (const file of collectedFiles) {
@@ -417,8 +428,56 @@ async function startFreePreview() {
             </div>
         `;
     } finally {
+        clearFreePreviewLoading();
         freePreviewRunning = false;
         updateButtonState();
+    }
+}
+
+function renderFreePreviewLoading() {
+    clearFreePreviewLoading();
+    const steps = [
+        'Dateien werden vorbereitet',
+        'Lesbarkeit wird geprüft',
+        'Fristen und Auffälligkeiten werden erkannt',
+        'Einschätzung wird erstellt',
+    ];
+    let idx = 0;
+
+    resultPreview.style.display = 'block';
+    resultPreview.innerHTML = `
+        <div class="preview-loading">
+            <div class="preview-loading-head">
+                <div class="spinner"></div>
+                <div>
+                    <div class="preview-loading-title">Kostenloser Vorab-Check läuft</div>
+                    <div class="preview-loading-sub" id="previewLoadingSub">Bitte warten, Ihre Abrechnung wird analysiert.</div>
+                </div>
+            </div>
+            <div class="preview-progress"><div class="preview-progress-bar"></div></div>
+            <div class="preview-loading-list" id="previewLoadingList">
+                ${steps.map((s, i) => `
+                    <div class="preview-loading-item ${i === 0 ? 'active' : ''}" data-step="${i}">
+                        <span class="preview-loading-dot"></span>
+                        <span>${s}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+
+    previewLoadingInterval = setInterval(() => {
+        idx = (idx + 1) % steps.length;
+        document.querySelectorAll('.preview-loading-item').forEach((el, i) => {
+            el.classList.toggle('active', i === idx);
+        });
+    }, 950);
+}
+
+function clearFreePreviewLoading() {
+    if (previewLoadingInterval) {
+        clearInterval(previewLoadingInterval);
+        previewLoadingInterval = null;
     }
 }
 
