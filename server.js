@@ -510,6 +510,37 @@ BEVOR du die Analyse startest, prüfe das Dokument:
 
 Wenn validierung != "ok": Setze alle anderen Felder auf sinnvolle Defaults (leere Arrays, null, 0). Die Analyse wird nicht durchgeführt.`;
 
+const PREVIEW_SYSTEM_PROMPT = `Du bist ein Assistent für einen kostenlosen Vorab-Check von Nebenkostenabrechnungen.
+Deine Aufgabe ist eine kurze, vorsichtige Ersteinschätzung vor dem Kauf einer vollständigen Prüfung.
+
+WICHTIG:
+- Keine Rechtsberatung.
+- Keine endgültigen Bewertungen.
+- Formuliere konservativ: "Hinweis", "Auffälligkeit", "bitte genauer prüfen".
+- Gib maximal 3 Auffälligkeiten zurück.
+- Wenn das Dokument nicht lesbar/unvollständig/kein Nebenkosten-Dokument ist, setze validierung entsprechend.
+
+Antworte ausschließlich als JSON in genau diesem Format:
+{
+  "validierung": "ok | nicht_lesbar | keine_abrechnung | unvollstaendig",
+  "validierung_grund": "Kurze Erklärung oder null",
+  "dokument_qualitaet": 0,
+  "lesbarkeit": "gut | mittel | schlecht",
+  "erkannte_basisdaten": {
+    "abrechnungszeitraum": "String oder null",
+    "wohnflaeche": "String oder null",
+    "gesamtkosten_mieter": "String oder null"
+  },
+  "auffaelligkeiten": [
+    {
+      "titel": "Maximal 8 Wörter",
+      "kurz": "Maximal 140 Zeichen, konkrete erste Einschätzung",
+      "status_hint": "hinweis | auffaellig | pruefen"
+    }
+  ],
+  "naechster_schritt": "1 kurzer Satz mit Empfehlung zur vollständigen Prüfung"
+}`;
+
 // === Token cost limits ===
 const MAX_PDF_TEXT_CHARS = 15000;  // ~4K tokens, plenty for a Nebenkostenabrechnung
 const MAX_PDF_BASE64_MB = 5;      // Skip vision for huge PDFs
@@ -662,6 +693,70 @@ async function runAnalysis(files) {
     }
 
     return JSON.parse(jsonStr);
+}
+
+function normalizePreviewResult(raw) {
+    const safe = raw && typeof raw === 'object' ? raw : {};
+    const validierung = ['ok', 'nicht_lesbar', 'keine_abrechnung', 'unvollstaendig'].includes(safe.validierung)
+        ? safe.validierung
+        : 'ok';
+    const lesbarkeit = ['gut', 'mittel', 'schlecht'].includes(safe.lesbarkeit)
+        ? safe.lesbarkeit
+        : 'mittel';
+    const qualitaetNum = Number(safe.dokument_qualitaet);
+    const dokumentQualitaet = Number.isFinite(qualitaetNum)
+        ? Math.max(0, Math.min(100, Math.round(qualitaetNum)))
+        : (lesbarkeit === 'gut' ? 85 : lesbarkeit === 'schlecht' ? 45 : 70);
+    const basis = safe.erkannte_basisdaten && typeof safe.erkannte_basisdaten === 'object'
+        ? safe.erkannte_basisdaten
+        : {};
+    const auffaelligkeiten = Array.isArray(safe.auffaelligkeiten)
+        ? safe.auffaelligkeiten.slice(0, 3).map((item) => ({
+            titel: sanitizeText(item?.titel, 80) || 'Mögliche Auffälligkeit',
+            kurz: sanitizeText(item?.kurz, 180) || 'Bitte im vollständigen Check genauer prüfen.',
+            status_hint: ['hinweis', 'auffaellig', 'pruefen'].includes(item?.status_hint)
+                ? item.status_hint
+                : 'hinweis',
+        }))
+        : [];
+
+    return {
+        validierung,
+        validierung_grund: sanitizeText(safe.validierung_grund, 220),
+        dokument_qualitaet: dokumentQualitaet,
+        lesbarkeit,
+        erkannte_basisdaten: {
+            abrechnungszeitraum: sanitizeText(basis.abrechnungszeitraum, 80),
+            wohnflaeche: sanitizeText(basis.wohnflaeche, 40),
+            gesamtkosten_mieter: sanitizeText(basis.gesamtkosten_mieter, 60),
+        },
+        auffaelligkeiten,
+        naechster_schritt: sanitizeText(safe.naechster_schritt, 220)
+            || 'Wenn Sie sicher gehen möchten, starten Sie die vollständige Prüfung mit fertigem Widerspruchsbrief.',
+    };
+}
+
+async function runFreePreview(files) {
+    const content = await buildContentFromFiles(files);
+    const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 1800,
+        temperature: 0,
+        system: PREVIEW_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content }],
+    });
+
+    const responseText = response.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('');
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+        throw new Error('Kein JSON im Vorab-Check gefunden');
+    }
+
+    return normalizePreviewResult(JSON.parse(jsonMatch[0]));
 }
 
 // === PDF Generation ===
@@ -1087,6 +1182,53 @@ app.post('/api/create-checkout', upload.array('files', 5), async (req, res) => {
 // === New V2 checkout with explicit plan ===
 app.post('/api/create-checkout-v2', upload.array('files', 5), async (req, res) => {
     return createCheckoutHandler(req, res, 'basic');
+});
+
+// === Kostenloser Vorab-Check (ohne Zahlung) ===
+app.post('/api/free-preview', upload.array('files', 5), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'Keine Datei hochgeladen.' });
+        }
+        if (!process.env.ANTHROPIC_API_KEY) {
+            return res.status(503).json({ error: 'Vorab-Check derzeit nicht verfügbar.' });
+        }
+
+        const source = sanitizeText(req.body.source || req.query.source, 120);
+        const campaign = sanitizeText(req.body.campaign || req.query.campaign, 120);
+
+        appendEvent({
+            eventName: 'free_preview_started',
+            source,
+            campaign,
+            meta: { file_count: req.files.length },
+        });
+
+        const files = req.files.map(f => ({
+            originalname: f.originalname,
+            mimetype: f.mimetype,
+            buffer: f.buffer,
+            size: f.size,
+        }));
+
+        const preview = await runFreePreview(files);
+
+        appendEvent({
+            eventName: 'free_preview_completed',
+            source,
+            campaign,
+            meta: {
+                file_count: req.files.length,
+                validierung: preview.validierung,
+                auffaelligkeiten: preview.auffaelligkeiten.length,
+            },
+        });
+
+        return res.json({ ok: true, preview });
+    } catch (err) {
+        console.error('free-preview error:', err.message);
+        return res.status(500).json({ error: 'Vorab-Check fehlgeschlagen. Bitte erneut versuchen.' });
+    }
 });
 
 // === STEP 2: Poll for analysis result ===

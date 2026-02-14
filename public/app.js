@@ -4,6 +4,7 @@ const fileInput = document.getElementById('fileInput');
 const fileList = document.getElementById('fileList');
 const fileListItems = document.getElementById('fileListItems');
 const addMoreBtn = document.getElementById('addMoreBtn');
+const startFreePreviewBtn = document.getElementById('startFreePreviewBtn');
 const startAnalysisBtn = document.getElementById('startAnalysisBtn');
 const emailInput = document.getElementById('emailInput');
 const uploadProgress = document.getElementById('uploadProgress');
@@ -20,6 +21,7 @@ let currentSessionId = null;
 let apiDone = false;
 let selectedPlan = 'basic';
 let uploadTracked = false;
+let freePreviewRunning = false;
 
 const PLAN_LABELS = {
     basic: 'Für 4,99 € prüfen lassen',
@@ -96,6 +98,7 @@ function trackEvent(eventName, extra = {}) {
 })();
 
 trackEvent('page_view');
+updateButtonState();
 
 // === Poll server for analysis result ===
 function pollForResults(sessionId) {
@@ -165,12 +168,20 @@ addMoreBtn.addEventListener('click', () => fileInput.click());
 const consentCheckbox = document.getElementById('consentCheckbox');
 
 function updateButtonState() {
+    const hasFiles = collectedFiles.length > 0;
     const emailValid = emailInput.value.trim() !== '' && emailInput.validity.valid;
-    startAnalysisBtn.disabled = !(consentCheckbox.checked && emailValid);
+    startAnalysisBtn.disabled = freePreviewRunning || !(hasFiles && consentCheckbox.checked && emailValid);
+    if (startFreePreviewBtn) {
+        startFreePreviewBtn.disabled = freePreviewRunning || !hasFiles;
+    }
 }
 
 consentCheckbox.addEventListener('change', updateButtonState);
 emailInput.addEventListener('input', updateButtonState);
+
+if (startFreePreviewBtn) {
+    startFreePreviewBtn.addEventListener('click', () => startFreePreview());
+}
 
 // Start analysis button → now triggers Stripe Checkout
 startAnalysisBtn.addEventListener('click', () => startCheckout());
@@ -222,6 +233,7 @@ function addFiles(files) {
             trackEvent('upload_updated', { file_count: collectedFiles.length });
         }
     }
+    updateButtonState();
 }
 
 function renderFileList() {
@@ -245,16 +257,65 @@ function removeFile(index) {
         resetUpload();
     } else {
         renderFileList();
+        updateButtonState();
     }
 }
 
 // === Upload files to server + redirect to Stripe Checkout ===
+async function startFreePreview() {
+    if (collectedFiles.length === 0 || freePreviewRunning) return;
+    const attribution = getAttribution();
+    freePreviewRunning = true;
+    updateButtonState();
+    trackEvent('free_preview_clicked', { file_count: collectedFiles.length });
+
+    resultPreview.style.display = 'block';
+    resultPreview.innerHTML = `
+        <div class="result-summary">
+            <p><strong>Kostenloser Vorab-Check läuft...</strong><br>Wir prüfen jetzt Lesbarkeit und erste Auffälligkeiten. Das dauert in der Regel unter 30 Sekunden.</p>
+        </div>
+    `;
+
+    const formData = new FormData();
+    for (const file of collectedFiles) {
+        formData.append('files', file);
+    }
+    formData.append('source', attribution.source);
+    formData.append('campaign', attribution.campaign);
+
+    try {
+        const res = await fetch('/api/free-preview', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || 'Vorab-Check fehlgeschlagen.');
+        }
+        renderFreePreview(data.preview);
+        trackEvent('free_preview_rendered', {
+            validierung: data.preview?.validierung || 'ok',
+            auffaelligkeiten: data.preview?.auffaelligkeiten?.length || 0,
+        });
+    } catch (err) {
+        resultPreview.innerHTML = `
+            <div class="result-summary">
+                <p><strong>Vorab-Check aktuell nicht verfügbar.</strong><br>${escapeHTML(err.message || 'Bitte versuchen Sie es erneut.')}</p>
+            </div>
+        `;
+    } finally {
+        freePreviewRunning = false;
+        updateButtonState();
+    }
+}
+
 async function startCheckout() {
     if (collectedFiles.length === 0) return;
     const attribution = getAttribution();
 
     // Disable button and show loading state
     startAnalysisBtn.disabled = true;
+    if (startFreePreviewBtn) startFreePreviewBtn.disabled = true;
     startAnalysisBtn.textContent = 'Wird vorbereitet...';
 
     const formData = new FormData();
@@ -277,8 +338,8 @@ async function startCheckout() {
 
         if (!res.ok) {
             alert(data.error || 'Fehler beim Erstellen der Zahlung.');
-            startAnalysisBtn.disabled = false;
             startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
+            updateButtonState();
             return;
         }
 
@@ -292,8 +353,8 @@ async function startCheckout() {
 
     } catch (err) {
         alert('Verbindung zum Server fehlgeschlagen. Läuft der Server?');
-        startAnalysisBtn.disabled = false;
         startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
+        updateButtonState();
     }
 }
 
@@ -486,6 +547,75 @@ function escapeHTML(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function renderFreePreview(preview) {
+    if (!preview) return;
+
+    if (preview.validierung && preview.validierung !== 'ok') {
+        const message = preview.validierung_grund || 'Das Dokument konnte im Vorab-Check nicht sicher erkannt werden.';
+        resultPreview.innerHTML = `
+            <div class="result-summary">
+                <p><strong>Vorab-Check: Bitte Upload verbessern</strong><br>${escapeHTML(message)}</p>
+            </div>
+            <div class="result-actions">
+                <button class="btn btn-outline" onclick="resetUpload()">Neue Dateien hochladen</button>
+            </div>
+        `;
+        resultPreview.style.display = 'block';
+        resultPreview.style.animation = 'fadeInUp 0.5s ease';
+        return;
+    }
+
+    const basis = preview.erkannte_basisdaten || {};
+    const chips = [];
+    if (basis.abrechnungszeitraum) chips.push(`Zeitraum: ${basis.abrechnungszeitraum}`);
+    if (basis.wohnflaeche) chips.push(`Wohnfläche: ${basis.wohnflaeche}`);
+    if (basis.gesamtkosten_mieter) chips.push(`Gesamtkosten: ${basis.gesamtkosten_mieter}`);
+
+    const items = Array.isArray(preview.auffaelligkeiten) ? preview.auffaelligkeiten : [];
+    const itemHtml = items.length > 0
+        ? items.map((item) => `
+            <div class="preview-item ${escapeHTML(item.status_hint || 'hinweis')}">
+                <strong>${escapeHTML(item.titel || 'Hinweis')}</strong>
+                <p>${escapeHTML(item.kurz || '')}</p>
+            </div>
+        `).join('')
+        : '<div class="preview-item hinweis"><strong>Keine klaren Auffälligkeiten im Vorab-Check.</strong><p>Für eine belastbare Bewertung empfehlen wir trotzdem die vollständige Prüfung.</p></div>';
+
+    resultPreview.innerHTML = `
+        <div class="result-summary free-preview">
+            <div class="preview-headline">
+                <h3>Kostenloser Vorab-Check</h3>
+                <span class="preview-quality">Dokumentqualität: ${Number(preview.dokument_qualitaet || 0)} / 100 (${escapeHTML(preview.lesbarkeit || 'mittel')})</span>
+            </div>
+            <p class="preview-note">Dies ist eine erste Einschätzung. Für konkrete Fehlerbewertung, Ersparnis und fertigen Widerspruchsbrief ist die vollständige Prüfung nötig.</p>
+            ${chips.length > 0 ? `<div class="preview-meta">${chips.map((c) => `<span class="preview-chip">${escapeHTML(c)}</span>`).join('')}</div>` : ''}
+            <div class="preview-items">${itemHtml}</div>
+            <p>${escapeHTML(preview.naechster_schritt || 'Wenn Sie sicher gehen möchten, starten Sie jetzt die vollständige Prüfung für 4,99 €.')}</p>
+            <div class="preview-actions">
+                <button class="btn" id="proceedFullCheckBtn">Jetzt vollständige Prüfung starten (4,99 €)</button>
+                <button class="btn btn-outline" onclick="resetUpload()">Neue Abrechnung laden</button>
+            </div>
+        </div>
+    `;
+
+    const proceedBtn = document.getElementById('proceedFullCheckBtn');
+    if (proceedBtn) {
+        proceedBtn.addEventListener('click', () => {
+            const target = document.getElementById('emailInput');
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                target.focus();
+            }
+            startAnalysisBtn.classList.add('checkout-highlight');
+            setTimeout(() => startAnalysisBtn.classList.remove('checkout-highlight'), 1800);
+            trackEvent('free_preview_to_checkout');
+        });
+    }
+
+    resultPreview.style.display = 'block';
+    resultPreview.style.animation = 'fadeInUp 0.5s ease';
 }
 
 function renderResults(data) {
@@ -709,12 +839,14 @@ function copyLetter() {
 function resetUpload() {
     collectedFiles = [];
     uploadTracked = false;
+    freePreviewRunning = false;
     uploadArea.style.display = 'block';
     fileList.style.display = 'none';
     uploadProgress.style.display = 'none';
     resultPreview.style.display = 'none';
     fileInput.value = '';
     startAnalysisBtn.textContent = PLAN_LABELS[selectedPlan] || PLAN_LABELS.basic;
+    updateButtonState();
 }
 
 // === Smooth Scroll for anchor links ===

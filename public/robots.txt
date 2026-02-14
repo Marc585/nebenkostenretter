@@ -3,6 +3,9 @@
 
 User-agent: *
 Allow: /
+Disallow: /admin-funnel.html
+Disallow: /api/
+Disallow: /webhook
 
 # AI Search Engine Bots — explicitly allowed
 User-agent: GPTBot

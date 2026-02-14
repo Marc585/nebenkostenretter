@@ -1,0 +1,25 @@
+NebenkostenRetter (https://nebenkostenretter.de) ist ein deutschsprachiger Onlineservice zur Prüfung von Nebenkostenabrechnungen.
+
+Kernangebot:
+- Kostenloser Vorab-Check: Lesbarkeit, Dokumentqualität und erste Auffälligkeiten.
+- Vollständige Prüfung für 4,99 EUR pro Abrechnung.
+- Ergebnis mit klarer Zusammenfassung, potenzieller Ersparnis und Muster-Widerspruchsbrief.
+
+Zielgruppe:
+- Mieter in Deutschland, die ihre Nebenkostenabrechnung auf Fehler prüfen möchten.
+
+Rechtlicher Rahmen:
+- Prüfung basiert auf BetrKV und § 556 BGB.
+- Keine individuelle Rechtsberatung.
+
+Wichtige Seiten:
+- Start: https://nebenkostenretter.de/
+- Prüfung: https://nebenkostenretter.de/nebenkostenabrechnung-pruefen.html
+- Widerspruch: https://nebenkostenretter.de/widerspruch-nebenkostenabrechnung-muster.html
+- Nicht umlagefähige Kosten: https://nebenkostenretter.de/betriebskosten-nicht-umlagefaehig.html
+- Ratgeber: https://nebenkostenretter.de/blog.html
+
+Quellen:
+- Deutscher Mieterbund: https://www.mieterbund.de/
+- Betriebskostenverordnung: https://www.gesetze-im-internet.de/betrkv/
+- § 556 BGB: https://www.gesetze-im-internet.de/bgb/__556.html
