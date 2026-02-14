@@ -15,6 +15,10 @@ const { Resend } = require('resend');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Behind Nginx/Reverse proxies we must trust X-Forwarded-* headers.
+// Required so express-rate-limit can correctly identify client IPs.
+app.set('trust proxy', 1);
+
 // Security & performance middleware
 app.use(compression());
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || true }));

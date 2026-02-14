@@ -195,6 +195,19 @@ addMoreBtn.addEventListener('click', () => fileInput.click());
 
 // Consent checkbox + email → enable/disable payment button
 const consentCheckbox = document.getElementById('consentCheckbox');
+const consentError = document.getElementById('consentError');
+
+function showConsentError(message) {
+    if (!consentError) return;
+    consentError.textContent = message;
+    consentError.style.display = 'block';
+}
+
+function clearConsentError() {
+    if (!consentError) return;
+    consentError.textContent = '';
+    consentError.style.display = 'none';
+}
 
 function updateButtonState() {
     const hasFiles = collectedFiles.length > 0;
@@ -203,6 +216,7 @@ function updateButtonState() {
     if (startFreePreviewBtn) {
         startFreePreviewBtn.disabled = freePreviewRunning || !(hasFiles && consentCheckbox.checked);
     }
+    if (consentCheckbox.checked) clearConsentError();
 }
 
 consentCheckbox.addEventListener('change', updateButtonState);
@@ -393,10 +407,11 @@ function removeFile(index) {
 async function startFreePreview() {
     if (collectedFiles.length === 0 || freePreviewRunning) return;
     if (!consentCheckbox.checked) {
-        alert('Bitte bestätigen Sie zuerst die Datenverarbeitung in der Checkbox, bevor der Vorab-Check startet.');
+        showConsentError('Bitte setzen Sie den Haken, damit wir Ihre Abrechnung verarbeiten dürfen. Ohne Einwilligung kann der Vorab-Check nicht starten.');
         consentCheckbox.focus();
         return;
     }
+    clearConsentError();
     const attribution = getAttribution();
     freePreviewRunning = true;
     updateButtonState();
@@ -490,10 +505,11 @@ function clearFreePreviewLoading() {
 async function startCheckout() {
     if (collectedFiles.length === 0) return;
     if (!consentCheckbox.checked) {
-        alert('Bitte bestätigen Sie zuerst die Datenverarbeitung in der Checkbox, bevor Sie die Prüfung starten.');
+        showConsentError('Bitte setzen Sie den Haken, damit wir Ihre Abrechnung verarbeiten dürfen. Ohne Einwilligung kann die Prüfung nicht starten.');
         consentCheckbox.focus();
         return;
     }
+    clearConsentError();
     const attribution = getAttribution();
 
     // Disable button and show loading state

@@ -971,6 +971,23 @@ a { color: var(--primary); text-decoration: none; }
 .file-list-consent {
     padding: 16px 20px 0;
 }
+
+.inline-error {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid #f1b6b6;
+    background: #fff2f2;
+    color: #7a1f1f;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.inline-error a {
+    color: inherit;
+    text-decoration: underline;
+}
+
 .consent-label {
     display: flex; align-items: flex-start; gap: 10px;
     font-size: 13px; color: var(--text-secondary); line-height: 1.6;
