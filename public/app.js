@@ -111,9 +111,6 @@ function trackEvent(eventName, extra = {}) {
     }
 })();
 
-trackEvent('page_view');
-updateButtonState();
-
 function hidePageLoader() {
     if (!pageLoader) return;
     pageLoader.classList.add('hidden');
@@ -240,6 +237,10 @@ if (livingAreaInput) {
 if (startFreePreviewBtn) {
     startFreePreviewBtn.addEventListener('click', () => startFreePreview());
 }
+
+// Run after all elements (incl. consent checkbox) are initialized.
+trackEvent('page_view');
+updateButtonState();
 
 // Start analysis button → now triggers Stripe Checkout
 startAnalysisBtn.addEventListener('click', () => startCheckout());
